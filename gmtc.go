@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"gmtc/parser"
+	"gmtc/project"
 	"io"
 	"os"
+	"strings"
 )
 
 var filepath = flag.String("path", "", "Path to the file to be parsed")
@@ -19,11 +21,42 @@ func ReadStdin() (string, error) {
 	return string(text), nil
 }
 
+func ParseFile(filepath string) error {
+	if strings.HasSuffix(filepath, ".yyp") {
+		return project.ReadYYP(filepath)
+	}
+
+	bytes, err := os.ReadFile(filepath)
+	if err != nil { return err }
+	text := string(bytes)
+	err = Parse(text)
+	if err != nil {
+		return fmt.Errorf("%v: %v", filepath, err)
+	}
+	return nil
+}
+
+func ParseStdin() error {
+	text, err := ReadStdin()
+	if err != nil { return err }
+	err = Parse(text)
+	if err != nil {
+		return fmt.Errorf("Stdin: %v", err)
+	}
+	return nil
+}
+
+func Parse(text string) error {
+	tokens, err := parser.Tokenize(text)
+	if err != nil { return err }
+	fmt.Println(tokens)
+	return nil
+}
+
 func main() {
 	flag.Parse()
 
 	var err error
-	text := ""
 
 	if len(*filepath) > 0 && *stdin {
 		panic("Cannot read file and stdin at the same time.")
@@ -35,26 +68,13 @@ func main() {
 	}
 
 	if len(*filepath) > 0 {
-		bytes, err := os.ReadFile(*filepath)
-		if err != nil {
-			panic(err)
-		}
-		text = string(bytes)
+		err = ParseFile(*filepath)
+		if err != nil { panic(err) }
+		return
 	}
 
 	if *stdin {
-		text, err = ReadStdin()
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	tokens, err := parser.Tokenize(&parser.Scanner{Text: text})
-
-	fmt.Println(tokens)
-	fmt.Println(err)
-	fmt.Println()
-	for _, tok := range tokens {
-		fmt.Print(tok.Value, " ")
+		err = ParseStdin()
+		if err != nil { panic(err) }
 	}
 }
