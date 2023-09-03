@@ -13,12 +13,11 @@ type Location struct {
 }
 
 type TOKEN_TYPE int
-
 //go:generate stringer -type=TOKEN_TYPE -trimprefix=T_
 const (
-	T_UNKNOWN TOKEN_TYPE = 0
+	T_UNKNOWN TOKEN_TYPE = iota
 
-	T_IDENT TOKEN_TYPE = iota
+	T_IDENT
 	T_NUMBER
 	T_STRING
 
@@ -65,6 +64,10 @@ const (
 	T_RSHIFT
 
 	T_ASSIGN
+	T_ADD_ASSIGN
+	T_SUB_ASSIGN
+	T_MUL_ASSIGN
+	T_DIV_ASSIGN
 
 	T_HASH
 	T_BACKSLASH
@@ -89,6 +92,10 @@ var literal_tokens = []LToken{
 	{"==", T_EQ},
 	{"||", T_OR},
 	{"&&", T_AND},
+	{"+=", T_ADD_ASSIGN},
+	{"-=", T_SUB_ASSIGN},
+	{"*=", T_MUL_ASSIGN},
+	{"/=", T_DIV_ASSIGN},
 
 	{ "|", T_BITOR },
 	{ "&", T_BITAND },
@@ -445,7 +452,7 @@ func (s *scanner) tokenize() (Tokens, error) {
 	return tokens, nil
 }
 
-func PreTokenize(text string) (Tokens, error) {
+func Pretokenize(text string) (Tokens, error) {
 	s := scanner{Text: text}
 	return s.tokenize()
 }
@@ -466,7 +473,7 @@ type Macro struct {
 	RawTokensLength int
 }
 
-func (ts Tokens) extractMacros() map[string]Macro {
+func (ts Tokens) ExtractMacros() map[string]Macro {
 	out := make(map[string]Macro)
 
 	for i := range ts {
@@ -508,7 +515,7 @@ func (ts Tokens) extractMacros() map[string]Macro {
 	return out
 }
 
-func (ts Tokens) insertMacros(macros map[string]Macro) Tokens {
+func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
 	for i := len(ts)-1 ; i>=0 ; i-- {
 		if ts[i].Type != T_IDENT { continue }
 		macro, ok := macros[ts[i].Value]
@@ -519,7 +526,7 @@ func (ts Tokens) insertMacros(macros map[string]Macro) Tokens {
 	return ts
 }
 
-func (ts Tokens) clean(macros map[string]Macro) Tokens {
+func (ts Tokens) Clean(macros map[string]Macro) Tokens {
 	for i := len(ts)-1 ; i>=0 ; i-- {
 		if ts[i].Type == T_NEWLINE {
 			ts = slices.Delete(ts, i, i+1)
@@ -539,10 +546,10 @@ func (ts Tokens) clean(macros map[string]Macro) Tokens {
 	return ts
 }
 
-func Tokenize(text string) (Tokens, error) {
-	ts, err := PreTokenize(text)
+func TokenizeString(text string) (Tokens, error) {
+	ts, err := Pretokenize(text)
 	if err != nil { return nil, err }
-	macros := ts.extractMacros()
-	ts = ts.insertMacros(macros).clean(macros)
+	macros := ts.ExtractMacros()
+	ts = ts.InsertMacros(macros).Clean(macros)
 	return ts, nil
 }
