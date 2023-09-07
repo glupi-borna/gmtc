@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"errors"
+	"strings"
 )
 
 func IsBetween(char byte, start byte, end byte) bool {
@@ -54,6 +55,19 @@ func (e Errors) Extend(es Errors) Errors {
 	return append(e, es...)
 }
 
+func (e Errors) Merge() error {
+	sb := strings.Builder{}
+
+	for i, err := range e {
+		if i != 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(err.Error())
+	}
+
+	return errors.New(sb.String())
+}
+
 func MapMerge[K comparable, V any](maps ...map[K]V) map[K]V {
 	size := 0
 	for _, m := range maps {
@@ -87,11 +101,4 @@ func ErrorCount[K any](es Errors) int {
 		}
 	}
 	return count
-}
-
-func AnyNil(vals ...any) bool {
-	for _, v := range vals {
-		if v == nil { return true }
-	}
-	return false
 }

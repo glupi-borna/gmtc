@@ -4,8 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"gmtc/parser"
+	"gmtc/ast"
 	"gmtc/project"
-	"gmtc/utils"
+	pp "gmtc/project_parser"
 	"io"
 	"os"
 	"strings"
@@ -26,49 +27,51 @@ func ParseProject(filepath string) error {
 	p, err := project.LoadProject(filepath)
 	if err != nil { return err }
 
-	count := 0
-
-	parse_resource := func(res project.Resource) {
-		script, ok := res.(*project.ResGMScript)
-		if ok {
-			count++
-			parse_error := Parse(script.Script)
-			if parse_error != nil {
-				script.Errors = script.Errors.AddPrefix(script.GMLPath, parse_error)
-			}
-			return
-		}
-
-		obj, ok := res.(*project.ResGMObject)
-		if ok {
-			for _, ev := range obj.Events {
-				count++
-				parse_error := Parse(ev.Script)
-				if parse_error != nil {
-					ev.Errors = ev.Errors.AddPrefix(ev.GMLPath, parse_error)
-				}
-			}
-			return
-		}
-	}
-
-	for _, res := range p.Resources {
-		parse_resource(res)
-	}
-
-	all_errors := p.AllErrors()
-	err_count := len(all_errors)
-	fmt.Printf("Parsing project finished\n")
-	fmt.Printf("Parsed %v files\n", count)
-	fmt.Printf("%v errors\n", err_count)
-	if err_count > 0 {
-		load_errors := utils.ErrorCount[project.LoadResourceError](all_errors)
-		fmt.Printf("Failed to find %v files\n", load_errors)
-		for _, e := range all_errors {
-			if _, ok := e.(project.LoadResourceError) ; ok { continue }
-			fmt.Println(e)
-		}
-	}
+	errs := pp.Tokenize(p)
+	fmt.Println(errs)
+// 	count := 0
+//
+// 	parse_resource := func(res project.Resource) {
+// 		script, ok := res.(*project.ResGMScript)
+// 		if ok {
+// 			count++
+// 			parse_error := Parse(script.Script)
+// 			if parse_error != nil {
+// 				script.Errors = script.Errors.AddPrefix(script.GMLPath, parse_error)
+// 			}
+// 			return
+// 		}
+//
+// 		obj, ok := res.(*project.ResGMObject)
+// 		if ok {
+// 			for _, ev := range obj.Events {
+// 				count++
+// 				parse_error := Parse(ev.Script)
+// 				if parse_error != nil {
+// 					ev.Errors = ev.Errors.AddPrefix(ev.GMLPath, parse_error)
+// 				}
+// 			}
+// 			return
+// 		}
+// 	}
+//
+// 	for _, res := range p.Resources {
+// 		parse_resource(res)
+// 	}
+//
+// 	all_errors := p.AllErrors()
+// 	err_count := len(all_errors)
+// 	fmt.Printf("Parsing project finished\n")
+// 	fmt.Printf("Parsed %v files\n", count)
+// 	fmt.Printf("%v errors\n", err_count)
+// 	if err_count > 0 {
+// 		load_errors := utils.ErrorCount[project.LoadResourceError](all_errors)
+// 		fmt.Printf("Failed to find %v files\n", load_errors)
+// 		for _, e := range all_errors {
+// 			if _, ok := e.(project.LoadResourceError) ; ok { continue }
+// 			fmt.Println(e)
+// 		}
+// 	}
 
 	return nil
 }
@@ -103,11 +106,13 @@ func ParseStdin() error {
 }
 
 func Parse(text string) error {
-	_, err := parser.Tokenize(text)
+	ts, err := parser.TokenizeString(text)
 	if err != nil {
 		return err
 	}
-	// fmt.Println(tokens)
+
+	ast.ParseAST(ts)
+
 	return nil
 }
 

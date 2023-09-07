@@ -64,10 +64,13 @@ const (
 	T_RSHIFT
 
 	T_ASSIGN
-	T_ADD_ASSIGN
-	T_SUB_ASSIGN
-	T_MUL_ASSIGN
-	T_DIV_ASSIGN
+	T_ASSIGN_ADD
+	T_ASSIGN_SUB
+	T_ASSIGN_MUL
+	T_ASSIGN_DIV
+
+	T_DECREMENT
+	T_INCREMENT
 
 	T_HASH
 	T_BACKSLASH
@@ -92,10 +95,13 @@ var literal_tokens = []LToken{
 	{"==", T_EQ},
 	{"||", T_OR},
 	{"&&", T_AND},
-	{"+=", T_ADD_ASSIGN},
-	{"-=", T_SUB_ASSIGN},
-	{"*=", T_MUL_ASSIGN},
-	{"/=", T_DIV_ASSIGN},
+	{"+=", T_ASSIGN_ADD},
+	{"-=", T_ASSIGN_SUB},
+	{"*=", T_ASSIGN_MUL},
+	{"/=", T_ASSIGN_DIV},
+
+	{"--", T_DECREMENT},
+	{"++", T_INCREMENT},
 
 	{ "|", T_BITOR },
 	{ "&", T_BITAND },

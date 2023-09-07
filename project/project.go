@@ -124,7 +124,7 @@ type ResGMScript struct {
 
 func (r *ResGMScript) GetErrors() utils.Errors { return r.Errors }
 
-func (r *ResGMScript) Pretokenize() map[string]parser.Macro {
+func (r *ResGMScript) Pretokenize() (map[string]parser.Macro, error) {
 	ts, err := parser.Pretokenize(r.Script)
 	if err != nil {
 		r.Tokens = nil
@@ -132,7 +132,7 @@ func (r *ResGMScript) Pretokenize() map[string]parser.Macro {
 		return nil, err
 	}
 	r.Tokens = ts
-	return ts.ExtractMacros()
+	return ts.ExtractMacros(), nil
 }
 
 func loadGMScript(path string) (ResGMScript, error) {
