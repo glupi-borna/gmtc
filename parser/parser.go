@@ -3,9 +3,9 @@ package parser
 import (
 	"errors"
 	"fmt"
-	"strings"
-	"slices"
 	. "gmtc/utils"
+	"slices"
+	"strings"
 )
 
 type Location struct {
@@ -13,6 +13,7 @@ type Location struct {
 }
 
 type TOKEN_TYPE int
+
 //go:generate stringer -type=TOKEN_TYPE -trimprefix=T_
 const (
 	T_UNKNOWN TOKEN_TYPE = iota
@@ -85,6 +86,8 @@ type LToken struct {
 }
 
 var literal_tokens = []LToken{
+	{"\r\n", T_NEWLINE},
+
 	{"[|", T_ACC_LIST},
 	{"[?", T_ACC_MAP},
 	{"[#", T_ACC_GRID},
@@ -103,12 +106,12 @@ var literal_tokens = []LToken{
 	{"--", T_DECREMENT},
 	{"++", T_INCREMENT},
 
-	{ "|", T_BITOR },
-	{ "&", T_BITAND },
-	{ "~", T_BITNOT },
-	{ "^", T_BITXOR },
-	{ "<<", T_LSHIFT },
-	{ ">>", T_RSHIFT },
+	{"|", T_BITOR},
+	{"&", T_BITAND},
+	{"~", T_BITNOT},
+	{"^", T_BITXOR},
+	{"<<", T_LSHIFT},
+	{">>", T_RSHIFT},
 
 	{".", T_DOT},
 	{"?", T_QUESTION},
@@ -230,7 +233,9 @@ func (s *scanner) eatBlockComments() bool {
 				break
 			}
 		}
-		if !moved { break }
+		if !moved {
+			break
+		}
 	}
 
 	return moved
@@ -239,7 +244,9 @@ func (s *scanner) eatBlockComments() bool {
 func (s *scanner) eatLineComments() bool {
 	moved := false
 	for {
-		if !s.startsWith("//") { break }
+		if !s.startsWith("//") {
+			break
+		}
 		for s.char() != EOF && s.char() != '\n' {
 			s.move()
 			moved = true
@@ -251,7 +258,9 @@ func (s *scanner) eatLineComments() bool {
 func (s *scanner) eatRegions() bool {
 	moved := false
 	for {
-		if !s.startsWith("#region") && !s.startsWith("#endregion") { break }
+		if !s.startsWith("#region") && !s.startsWith("#endregion") {
+			break
+		}
 		for s.char() != EOF && s.char() != '\n' {
 			s.move()
 			moved = true
@@ -450,7 +459,7 @@ func (s *scanner) tokenize() (Tokens, error) {
 			continue
 		}
 
-		return nil, fmt.Errorf("Unexpected character at %v:%v: %v", s.Loc.Line+1, s.Loc.Char+1, string(next_char))
+		return nil, fmt.Errorf("Unexpected character at %v:%v: %v (%v)", s.Loc.Line+1, s.Loc.Char+1, string(next_char), next_char)
 	}
 
 	tokens = append(tokens, Token{Type: T_EOF})
@@ -464,18 +473,22 @@ func Pretokenize(text string) (Tokens, error) {
 }
 
 func (ts Tokens) MatchTypeAt(index int, tt TOKEN_TYPE) bool {
-	if index < 0 || index >= len(ts) { return false }
+	if index < 0 || index >= len(ts) {
+		return false
+	}
 	return ts[index].Type == tt
 }
 
 func (ts Tokens) MatchValueAt(index int, value string) bool {
-	if index < 0 || index >= len(ts) { return false }
+	if index < 0 || index >= len(ts) {
+		return false
+	}
 	return ts[index].Value == value
 }
 
 type Macro struct {
-	Name, Config string
-	Value Tokens
+	Name, Config    string
+	Value           Tokens
 	RawTokensLength int
 }
 
@@ -484,9 +497,15 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 
 	for i := range ts {
 		macro_start := i
-		if !ts.MatchTypeAt(i, T_HASH) { continue }
-		if !ts.MatchValueAt(i+1, "macro") { continue }
-		if !ts.MatchTypeAt(i+2, T_IDENT) { continue }
+		if !ts.MatchTypeAt(i, T_HASH) {
+			continue
+		}
+		if !ts.MatchValueAt(i+1, "macro") {
+			continue
+		}
+		if !ts.MatchTypeAt(i+2, T_IDENT) {
+			continue
+		}
 
 		macro_name := ""
 		macro_config := ""
@@ -503,17 +522,23 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 		macro_newlines := 0
 		for {
 			tok := ts[i]
-			if tok.Type == T_NEWLINE || tok.Type == T_EOF { break }
-			if tok.Type == T_BACKSLASH { i++ }
-			if ts[i].Type == T_NEWLINE { macro_newlines++ }
+			if tok.Type == T_NEWLINE || tok.Type == T_EOF {
+				break
+			}
+			if tok.Type == T_BACKSLASH {
+				i++
+			}
+			if ts[i].Type == T_NEWLINE {
+				macro_newlines++
+			}
 			macro_value = append(macro_value, ts[i])
 			i++
 		}
 
 		out[macro_name] = Macro{
-			Name: macro_name,
-			Config: macro_config,
-			Value: macro_value,
+			Name:            macro_name,
+			Config:          macro_config,
+			Value:           macro_value,
 			RawTokensLength: i - macro_start - macro_newlines,
 		}
 	}
@@ -522,18 +547,24 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 }
 
 func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
-	for i := len(ts)-1 ; i>=0 ; i-- {
-		if ts[i].Type != T_IDENT { continue }
+	for i := len(ts) - 1; i >= 0; i-- {
+		if ts[i].Type != T_IDENT {
+			continue
+		}
 		macro, ok := macros[ts[i].Value]
-		if !ok { continue }
-		if ts.MatchTypeAt(i-2, T_HASH) || ts.MatchTypeAt(i-4, T_HASH) { continue }
+		if !ok {
+			continue
+		}
+		if ts.MatchTypeAt(i-2, T_HASH) || ts.MatchTypeAt(i-4, T_HASH) {
+			continue
+		}
 		ts = slices.Replace(ts, i, i+1, macro.Value...)
 	}
 	return ts
 }
 
 func (ts Tokens) Clean(macros map[string]Macro) Tokens {
-	for i := len(ts)-1 ; i>=0 ; i-- {
+	for i := len(ts) - 1; i >= 0; i-- {
 		if ts[i].Type == T_NEWLINE {
 			ts = slices.Delete(ts, i, i+1)
 			continue
@@ -545,7 +576,9 @@ func (ts Tokens) Clean(macros map[string]Macro) Tokens {
 				macro_token = ts[i+4]
 			}
 			macro, ok := macros[macro_token.Value]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			ts = slices.Delete(ts, i, i+macro.RawTokensLength)
 		}
 	}
@@ -554,7 +587,9 @@ func (ts Tokens) Clean(macros map[string]Macro) Tokens {
 
 func TokenizeString(text string) (Tokens, error) {
 	ts, err := Pretokenize(text)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	macros := ts.ExtractMacros()
 	ts = ts.InsertMacros(macros).Clean(macros)
 	return ts, nil

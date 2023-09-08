@@ -19,5 +19,9 @@ function make_game() {
 
     var fifteen = MULTILINE_TEST;
 
-    draw_sprite(10, 10, true, false, "hello, world!");
+    while (true) {
+        draw_text(1, 1, "Hello, world!");
+    }
+
+    obj[0].draw_sprite(10, 10, true, false, "hello, world!");
 }

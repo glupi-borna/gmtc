@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	p "gmtc/parser"
+	"reflect"
+	"strings"
 )
 
 type Scanner struct {
@@ -104,9 +106,121 @@ const (
 	AST_BREAK
 )
 
+type NodeBuilder struct {
+	b      strings.Builder
+	indent int
+}
+
+type NodeField struct {
+	Name  string
+	Value any
+}
+
+func (nb *NodeBuilder) Indent() { nb.indent++ }
+func (nb *NodeBuilder) Dedent() { nb.indent-- }
+
+func (nb *NodeBuilder) Write(text string) {
+	nb.b.WriteString(text)
+}
+
+func (nb *NodeBuilder) WriteIndent() {
+	nb.b.WriteString(strings.Repeat(".   ", nb.indent))
+}
+
+func (nb *NodeBuilder) Newline() { nb.b.WriteByte('\n') }
+
+func (nb *NodeBuilder) WriteLine(text string) {
+	nb.WriteIndent()
+	nb.Write(text)
+	nb.b.WriteByte('\n')
+}
+
+func (nb *NodeBuilder) WriteFields(fields ...NodeField) {
+	for _, field := range fields {
+		nb.WriteIndent()
+		nb.Write(".")
+		nb.Write(field.Name)
+
+		rv := reflect.ValueOf(field.Value)
+		if rv.IsZero() {
+			nb.Write(" -")
+			nb.Newline()
+			continue
+		}
+
+		switch v := field.Value.(type) {
+		case Node:
+			nb.Newline()
+			nb.Indent()
+			v.Render(nb)
+			nb.Dedent()
+			break
+
+		case Block:
+			nb.Newline()
+			nb.Indent()
+			v.Render(nb)
+			nb.Dedent()
+			break
+
+		case []Node:
+			nb.Indent()
+			for _, n := range v {
+				nb.Newline()
+				n.Render(nb)
+			}
+			nb.Dedent()
+			break
+
+		case []Statement:
+			nb.Indent()
+			for _, n := range v {
+				nb.Newline()
+				n.Render(nb)
+			}
+			nb.Dedent()
+			break
+
+		case []Arg:
+			nb.Write("(")
+			nb.Write(fmt.Sprint(len(v)))
+			nb.Write(")")
+			nb.Indent()
+			for _, n := range v {
+				nb.Newline()
+				n.Render(nb)
+			}
+			nb.Dedent()
+			break
+
+		default:
+			nb.Newline()
+			nb.Indent()
+			nb.WriteIndent()
+			nb.Write(fmt.Sprintf("%v", v))
+			nb.Dedent()
+			break
+		}
+
+		nb.Newline()
+	}
+}
+
+func (nb *NodeBuilder) RenderNode(b *Base, fields ...NodeField) {
+	nb.WriteIndent()
+	nb.Write(b.Type.String())
+	nb.Newline()
+	nb.WriteFields(fields...)
+}
+
+func (nb *NodeBuilder) String() string {
+	return nb.b.String()
+}
+
 type Node interface {
 	Start() p.Location
 	End() p.Location
+	Render(*NodeBuilder)
 }
 
 type Base struct {
@@ -116,6 +230,27 @@ type Base struct {
 type ScriptNode struct {
 	Base
 	Children []Statement
+}
+
+func (sn *ScriptNode) Start() p.Location {
+	if len(sn.Children) > 0 {
+		return sn.Children[0].Start()
+	}
+	return p.Location{}
+}
+
+func (sn *ScriptNode) End() p.Location {
+	if len(sn.Children) > 0 {
+		return sn.Children[len(sn.Children)-1].Start()
+	}
+	return p.Location{}
+}
+
+func (sn *ScriptNode) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&sn.Base,
+		NodeField{"Children", sn.Children},
+	)
 }
 
 type Statement interface {
@@ -260,6 +395,12 @@ type Block struct {
 func (b *Block) Start() p.Location { return b.openCurly.Loc }
 func (b *Block) End() p.Location   { return b.closeCurly.Loc }
 
+func (b *Block) Render(nb *NodeBuilder) {
+	for _, stmt := range b.Statements {
+		stmt.Render(nb)
+	}
+}
+
 func (ts *Scanner) ParseBlock() (Block, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -303,6 +444,14 @@ func (v *VarDecl) End() p.Location {
 		return v.Value.End()
 	}
 	return v.Name.Loc
+}
+
+func (v *VarDecl) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&v.Base,
+		NodeField{"Name", v.Name.Value},
+		NodeField{"Value", v.Value},
+	)
 }
 
 func (ts *Scanner) ParseVarDecl() (VarDecl, error) {
@@ -398,6 +547,15 @@ type FuncDecl struct {
 func (fn *FuncDecl) Start() p.Location { return fn.keyword.Loc }
 func (fn *FuncDecl) End() p.Location   { return fn.Body.End() }
 
+func (fn *FuncDecl) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&fn.Base,
+		NodeField{"Name", fn.Name.Value},
+		NodeField{"Args", fn.Args},
+		NodeField{"Body", fn.Body},
+	)
+}
+
 func (ts *Scanner) ParseFuncDecl() (FuncDecl, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -484,6 +642,13 @@ func (a *Arg) End() p.Location {
 	}
 	return a.Name.Loc
 }
+func (a *Arg) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&a.Base,
+		NodeField{"Name", a.Name.Value},
+		NodeField{"Default", a.Default},
+	)
+}
 
 func (ts *Scanner) ParseArg() (Arg, error) {
 	g := ts.GuardStart()
@@ -531,7 +696,6 @@ func (ts *Scanner) ParseExpr(expr_or_nil Node) (Node, error) {
 	if expr == nil {
 		panic("Nil expression")
 	}
-
 
 	binop, err := ts.ParseBinop(expr)
 	if err == nil {
@@ -612,6 +776,13 @@ type Simple struct {
 func (s *Simple) Start() p.Location { return s.Value.Loc }
 func (s *Simple) End() p.Location   { return s.Value.Loc }
 
+func (s *Simple) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&s.Base,
+		NodeField{"Value", s.Value.Value},
+	)
+}
+
 func (ts *Scanner) ParseIdent() (Simple, error) {
 	ident := ts.ParseType(0, p.T_IDENT)
 	if ident == nil {
@@ -668,6 +839,13 @@ type Array struct {
 func (b *Array) Start() p.Location { return b.openSquare.Loc }
 func (b *Array) End() p.Location   { return b.closeSquare.Loc }
 
+func (a *Array) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&a.Base,
+		NodeField{"Items", a.Items},
+	)
+}
+
 func (ts *Scanner) ParseArray() (Array, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -717,8 +895,15 @@ type Struct struct {
 	Fields                []Field
 }
 
-func (b *Struct) Start() p.Location { return b.openCurly.Loc }
-func (b *Struct) End() p.Location   { return b.closeCurly.Loc }
+func (s *Struct) Start() p.Location { return s.openCurly.Loc }
+func (s *Struct) End() p.Location   { return s.closeCurly.Loc }
+
+func (s *Struct) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&s.Base,
+		NodeField{"Fields", s.Fields},
+	)
+}
 
 func (ts *Scanner) ParseStruct() (Struct, error) {
 	g := ts.GuardStart()
@@ -778,6 +963,14 @@ func (f *Field) End() p.Location {
 	return f.Name.Loc
 }
 
+func (f *Field) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&f.Base,
+		NodeField{"Name", f.Name},
+		NodeField{"Value", f.Value},
+	)
+}
+
 func (ts *Scanner) ParseField() (Field, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -822,6 +1015,14 @@ type Call struct {
 
 func (c *Call) Start() p.Location { return c.Function.Start() }
 func (c *Call) End() p.Location   { return c.closeParen.Loc }
+
+func (c *Call) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&c.Base,
+		NodeField{"Function", c.Function},
+		NodeField{"Params", c.Params},
+	)
+}
 
 func (ts *Scanner) ParseCall(fn Node) (Node, error) {
 	g := ts.GuardStart()
@@ -877,6 +1078,14 @@ type Attr struct {
 func (a *Attr) Start() p.Location { return a.Value.Start() }
 func (a *Attr) End() p.Location   { return a.Name.Loc }
 
+func (a *Attr) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&a.Base,
+		NodeField{"Value", a.Value},
+		NodeField{"Name", a.Name},
+	)
+}
+
 func (ts *Scanner) ParseAttr(val Node) (Node, error) {
 	dot := ts.ParseType(0, p.T_DOT)
 	ident := ts.ParseType(1, p.T_IDENT)
@@ -898,6 +1107,15 @@ type Access struct {
 	Type          *p.Token
 	Value         Node
 	Access        Node
+}
+
+func (a *Access) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&a.Base,
+		NodeField{"Type", a.Type.Type.String()},
+		NodeField{"Value", a.Value},
+		NodeField{"Access", a.Access},
+	)
 }
 
 func (a *Access) Start() p.Location { return a.Value.Start() }
@@ -949,6 +1167,14 @@ type Unop struct {
 	Base
 	Op    *p.Token
 	Value Node
+}
+
+func (u *Unop) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&u.Base,
+		NodeField{"Operator", u.Op.Type.String()},
+		NodeField{"Value", u.Value},
+	)
 }
 
 func (u *Unop) Start() p.Location { return u.Op.Loc }
@@ -1012,6 +1238,15 @@ type Binop struct {
 func (b *Binop) Start() p.Location { return b.Left.Start() }
 func (b *Binop) End() p.Location   { return b.Right.End() }
 
+func (b *Binop) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&b.Base,
+		NodeField{"Operator", b.Op.Type.String()},
+		NodeField{"Left", b.Left},
+		NodeField{"Right", b.Right},
+	)
+}
+
 func (ts *Scanner) ParseBinop(left Node) (Binop, error) {
 	op := ts.ParseAnyType(0,
 		p.T_PLUS,
@@ -1066,6 +1301,13 @@ func (k *KwdStmt) End() p.Location {
 		return k.Value.End()
 	}
 	return k.Kwd.Loc
+}
+
+func (k *KwdStmt) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&k.Base,
+		NodeField{"Value", k.Value},
+	)
 }
 
 type VALUE_TYPE int
@@ -1131,6 +1373,14 @@ type BlockStmt struct {
 func (b *BlockStmt) Start() p.Location { return b.kwd.Loc }
 func (b *BlockStmt) End() p.Location   { return b.Body.End() }
 
+func (b *BlockStmt) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&b.Base,
+		NodeField{"Condition", b.Condition},
+		NodeField{"Body", b.Body},
+	)
+}
+
 func (ts *Scanner) ParseBlockStmt(kwd_str string, t AST_TYPE) (BlockStmt, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -1186,6 +1436,16 @@ func (i *IfStmt) End() p.Location {
 	return i.Body.End()
 }
 
+func (i *IfStmt) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&i.Base,
+		NodeField{"Condition", i.Condition},
+		NodeField{"Body", i.Body},
+		NodeField{"Elseifs", i.Elseifs},
+		NodeField{"Else", i.Else},
+	)
+}
+
 func (ts *Scanner) ParseIfStmt() (IfStmt, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
@@ -1236,15 +1496,25 @@ func (ts *Scanner) ParseIfStmt() (IfStmt, error) {
 
 type ForLoop struct {
 	Base
-	kwd *p.Token
+	kwd    *p.Token
 	Assign VarDecl
-	Cond Node
-	Oper Node
-	Body Node
+	Cond   Node
+	Oper   Node
+	Body   Node
 }
 
 func (f *ForLoop) Start() p.Location { return f.kwd.Loc }
-func (f *ForLoop) End() p.Location { return f.Body.End() }
+func (f *ForLoop) End() p.Location   { return f.Body.End() }
+
+func (f *ForLoop) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&f.Base,
+		NodeField{"Assign", f.Assign},
+		NodeField{"Cond", f.Cond},
+		NodeField{"Oper", f.Oper},
+		NodeField{"Body", f.Body},
+	)
+}
 
 func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 	g := ts.GuardStart()
@@ -1307,12 +1577,12 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 	}
 
 	return ForLoop{
-		Base: Base{AST_FOR},
-		kwd: kwd,
+		Base:   Base{AST_FOR},
+		kwd:    kwd,
 		Assign: decl,
-		Cond: cond,
-		Oper: oper,
-		Body: body,
+		Cond:   cond,
+		Oper:   oper,
+		Body:   body,
 	}, nil
 }
 
