@@ -74,4 +74,9 @@ function make_game() {
 
     var _glyph_index = _map[? 0x20];
     vertex_color(_vbuff, c_white, 1.0);
+
+    switch (abcde) {
+        case 1: return 1
+        default: return 10
+    }
 }

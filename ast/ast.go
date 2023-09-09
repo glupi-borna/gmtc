@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	// "runtime/debug"
+	"runtime"
 )
 
 type Scanner struct {
@@ -31,11 +32,28 @@ func (ts *Scanner) Move(amount int) {
 	ts.Furthest = max(ts.Index, ts.Furthest)
 }
 
+func PrintCaller(prefix string, indent int, depth int, suffix... any) {
+	if false {
+		caller, _, _, ok := runtime.Caller(1+depth)
+		if ok {
+			d := runtime.FuncForPC(caller)
+			args := []any{
+				strings.Repeat("|  ", indent),
+				prefix,
+				d.Name(),
+			}
+			args = append(args, suffix...)
+			fmt.Println(args...)
+		}
+	}
+}
+
 func (ts *Scanner) Save() {
 	ts.Saved = append(ts.Saved, ts.Index)
 }
 
 func (ts *Scanner) Restore() {
+	PrintCaller("Failure", len(ts.Saved), 1)
 	last := len(ts.Saved) - 1
 	if last < 0 {
 		panic("Empty restore stack!")
@@ -45,6 +63,7 @@ func (ts *Scanner) Restore() {
 }
 
 func (ts *Scanner) Commit() {
+	PrintCaller("Success", len(ts.Saved), 1)
 	last := len(ts.Saved) - 1
 	if last < 0 {
 		panic("Empty restore stack!")
@@ -53,10 +72,12 @@ func (ts *Scanner) Commit() {
 }
 
 func (ts *Scanner) GuardStart() int {
+	PrintCaller("Entering", len(ts.Saved), 1, ts.At(0))
 	return len(ts.Saved)
 }
 
 func (ts *Scanner) GuardEnd(num int) {
+	PrintCaller("Exitting", len(ts.Saved), 1)
 	if len(ts.Saved) != num {
 		panic("Unbalanced restore stack")
 	}
@@ -105,6 +126,10 @@ const (
 	AST_DOUNTIL
 	AST_REPEAT
 	AST_WITH
+	AST_CASE
+	AST_DEFAULT
+	AST_SWITCH
+	AST_TRY_CATCH
 
 	AST_RETURN
 	AST_CONTINUE
@@ -315,9 +340,11 @@ func ParseAST(tokens p.Tokens) (ScriptNode, error) {
 
 	stmts := ts.ParseStatements()
 
-	t := ts.Tokens[ts.Furthest]
-	if t.Type != p.T_EOF {
-		return ScriptNode{}, fmt.Errorf("Failed at token %v at %v:%v\n", t, t.Loc.Line+1, t.Loc.Char+1)
+	if ts.Furthest < len(ts.Tokens) {
+		t := ts.Tokens[ts.Furthest]
+		if t.Type != p.T_EOF {
+			return ScriptNode{}, fmt.Errorf("Failed at token %v at %v:%v\n", t, t.Loc.Line+1, t.Loc.Char+1)
+		}
 	}
 
 	return ScriptNode{
@@ -361,6 +388,14 @@ func (ts *Scanner) ParseAnyType(offset int, tts ...p.TOKEN_TYPE) *p.Token {
 	return nil
 }
 
+func Map[IN any, OUT any](arr []IN, fn func(IN)OUT) []OUT {
+	out := make([]OUT, len(arr))
+	for i, it := range arr {
+		out[i] = fn(it)
+	}
+	return out
+}
+
 func (ts *Scanner) ParseStatements() []Statement {
 	stmts := make([]Statement, 0)
 	for {
@@ -369,6 +404,10 @@ func (ts *Scanner) ParseStatements() []Statement {
 			break
 		}
 		stmts = append(stmts, stmt)
+
+		if ts.ParseType(0, p.T_RCURLY) != nil {
+			break
+		}
 	}
 	return stmts
 }
@@ -403,6 +442,16 @@ func (ts *Scanner) ParseStatement() Statement {
 	}
 
 	if stmt, err := ts.ParseWhileLoop(); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
+	if stmt, err := ts.ParseSwitch(); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
+	if stmt, err := ts.ParseTryCatch(); err == nil {
 		ts.EatSemicolon()
 		return &stmt
 	}
@@ -446,6 +495,8 @@ func (ts *Scanner) ParseStatement() Statement {
 		ts.EatSemicolon()
 		return &stmt
 	}
+
+	if ts.ParseExact(0, "case") != nil { return nil }
 
 	if expr_stmt, err := ts.ParseExpr(nil); err == nil {
 		ts.EatSemicolon()
@@ -529,7 +580,7 @@ func (ts *Scanner) ParseVarDecl() (VarDecl, error) {
 
 	kwd := ts.ParseExact(0, "var")
 	if kwd == nil {
-		ts.ParseExact(0, "static")
+		kwd = ts.ParseExact(0, "static")
 	}
 	name := ts.ParseType(1, p.T_IDENT)
 
@@ -614,7 +665,7 @@ type FuncDecl struct {
 	Base
 	keyword       *p.Token
 	Name          *p.Token
-	IsAnonymous     bool
+	IsAnonymous   bool
 	IsConstructor bool
 	Parent        *Call
 	Args          []Arg
@@ -880,9 +931,9 @@ func (ts *Scanner) ParseExprPart() (Node, error) {
 		return &ident, nil
 	}
 
-	ts.Save()
 	opening := ts.ParseType(0, p.T_LPAREN)
 	if opening != nil {
+		ts.Save()
 		ts.Move(1)
 		val, err := ts.ParseExpr(nil)
 		if err == nil {
@@ -897,8 +948,6 @@ func (ts *Scanner) ParseExprPart() (Node, error) {
 		} else {
 			ts.Restore()
 		}
-	} else {
-		ts.Restore()
 	}
 
 	return nil, errors.New("Failed to parse expression")
@@ -1223,6 +1272,9 @@ func (a *Attr) Render(nb *NodeBuilder) {
 }
 
 func (ts *Scanner) ParseAttr(val Node) (Node, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
 	dot := ts.ParseType(0, p.T_DOT)
 	ident := ts.ParseType(1, p.T_IDENT)
 	if dot == nil || ident == nil {
@@ -1332,6 +1384,9 @@ func (u *Unop) Start() p.Location { return u.Op.Loc }
 func (u *Unop) End() p.Location   { return u.Value.End() }
 
 func (ts *Scanner) ParseUnop() (Unop, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
 	op := ts.ParseAnyType(0,
 		p.T_MINUS,
 		p.T_EXCLAM,
@@ -1361,6 +1416,9 @@ func (ts *Scanner) ParseUnop() (Unop, error) {
 }
 
 func (ts *Scanner) ParseUnopPostfix(val Node) (Unop, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
 	op := ts.ParseAnyType(0,
 		p.T_DECREMENT,
 		p.T_INCREMENT,
@@ -1396,6 +1454,9 @@ func (b *Binop) Render(nb *NodeBuilder) {
 }
 
 func (ts *Scanner) ParseBinop(left Node) (Binop, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
 	op := ts.ParseAnyType(0,
 		p.T_PLUS,
 		p.T_MINUS,
@@ -1829,6 +1890,7 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 		body = &b
 	}
 
+	ts.Commit()
 	return ForLoop{
 		Base:   Base{AST_FOR},
 		kwd:    kwd,
@@ -1837,6 +1899,257 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 		Oper:   oper,
 		Body:   body,
 	}, nil
+}
+
+type Switch struct {
+	Base
+	kwd        *p.Token
+	Value      Node
+	Cases      []Case
+	closeParen *p.Token
+}
+
+func (s *Switch) Start() p.Location { return s.kwd.Loc }
+func (s *Switch) End() p.Location   { return s.closeParen.Loc }
+
+func (s *Switch) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&s.Base,
+		NodeField{"Value", s.Value},
+		NodeField{"Cases", s.Cases},
+	)
+}
+
+func (ts *Scanner) ParseSwitch() (Switch, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	switch_kwd := ts.ParseExact(0, "switch")
+	if switch_kwd == nil {
+		return Switch{}, errors.New("Not a switch")
+	}
+
+	ts.Save()
+	ts.Move(1)
+
+	value, err := ts.ParseExpr(nil)
+	if err != nil {
+		ts.Restore()
+		return Switch{}, err
+	}
+
+	opening := ts.ParseType(0, p.T_LCURLY)
+	if opening == nil {
+		ts.Restore()
+		return Switch{}, errors.New("Missing opening curly brace")
+	}
+	ts.Move(1)
+
+	cases := make([]Case, 0)
+	for {
+		c, err := ts.ParseCase()
+		if err != nil {
+			break
+		}
+		cases = append(cases, c)
+	}
+
+	closing := ts.ParseType(0, p.T_RCURLY)
+	if closing == nil {
+		ts.Restore()
+		return Switch{}, errors.New("Missing closing curly brace")
+	}
+	ts.Move(1)
+
+	ts.Commit()
+	return Switch{
+		Base:       Base{AST_SWITCH},
+		kwd:        switch_kwd,
+		Value:      value,
+		Cases:      cases,
+		closeParen: closing,
+	}, nil
+}
+
+type Case struct {
+	Base
+	kwd   *p.Token
+	Value Node
+	colon *p.Token
+	Code  []Statement
+}
+
+func (c *Case) Start() p.Location { return c.kwd.Loc }
+func (c *Case) End() p.Location {
+	if len(c.Code) > 0 {
+		return c.Code[len(c.Code)-1].End()
+	}
+	return c.colon.Loc
+}
+
+func (c *Case) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&c.Base,
+		NodeField{"Value", c.Value},
+		NodeField{"Code", c.Code},
+	)
+}
+
+func (ts *Scanner) ParseCase() (Case, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	case_kwd := ts.ParseExact(0, "case")
+	default_kwd := ts.ParseExact(0, "default")
+	ast_type := AST_DEFAULT
+
+	if case_kwd == nil && default_kwd == nil {
+		return Case{}, errors.New("Not a case")
+	}
+
+	ts.Save()
+	ts.Move(1)
+
+	kwd := default_kwd
+
+	var val Node
+	var err error
+	if case_kwd != nil {
+		kwd = case_kwd
+		ast_type = AST_CASE
+		val, err = ts.ParseExpr(nil)
+		if err != nil {
+			ts.Restore()
+			return Case{}, err
+		}
+	}
+
+	colon := ts.ParseType(0, p.T_COLON)
+	if colon == nil {
+		ts.Restore()
+		return Case{}, errors.New("Missing colon")
+	}
+	ts.Move(1)
+
+	code := ts.ParseStatements()
+	ts.Commit()
+	return Case{
+		Base:  Base{ast_type},
+		kwd:   kwd,
+		Value: val,
+		colon: colon,
+		Code:  code,
+	}, nil
+}
+
+type Catch struct {
+	Block
+	Ident p.Token
+}
+
+type TryCatch struct {
+	Base
+	kwd          *p.Token
+	TryBlock     Block
+	CatchBlock   *Catch
+	FinallyBlock *Block
+}
+
+func (tc *TryCatch) Start() p.Location { return tc.kwd.Loc }
+func (tc *TryCatch) End() p.Location {
+	if tc.FinallyBlock != nil {
+		return tc.FinallyBlock.End()
+	}
+	if tc.CatchBlock != nil {
+		return tc.CatchBlock.End()
+	}
+	return tc.TryBlock.End()
+}
+
+func (tc *TryCatch) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&tc.Base,
+		NodeField{"TryBlock", tc.TryBlock},
+		NodeField{"CatchBlock", tc.CatchBlock},
+		NodeField{"FinallyBlock", tc.FinallyBlock},
+	)
+}
+
+func (ts *Scanner) ParseTryCatch() (TryCatch, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	try_kwd := ts.ParseExact(0, "try")
+	if try_kwd == nil {
+		return TryCatch{}, errors.New("Not a try")
+	}
+
+	ts.Save()
+	ts.Move(1)
+
+	try_block, err := ts.ParseBlock()
+	if err != nil {
+		ts.Restore()
+		return TryCatch{}, err
+	}
+
+	catch_kwd := ts.ParseExact(0, "catch")
+	var catch *Catch
+	if catch_kwd != nil {
+		ts.Move(1)
+		op := ts.ParseType(0, p.T_LPAREN)
+		if op == nil {
+			ts.Restore()
+			return TryCatch{}, errors.New("Missing opening parenthesis")
+		}
+		ts.Move(1)
+
+		catch_ident := ts.ParseType(0, p.T_IDENT)
+		if catch_ident == nil {
+			ts.Restore()
+			return TryCatch{}, errors.New("Missing catch variable")
+		}
+		ts.Move(1)
+
+		cl := ts.ParseType(0, p.T_RPAREN)
+		if cl == nil {
+			ts.Restore()
+			return TryCatch{}, errors.New("Missing closing parenthesis")
+		}
+		ts.Move(1)
+
+		catch_block, err := ts.ParseBlock()
+		if err != nil {
+			ts.Restore()
+			return TryCatch{}, err
+		}
+
+		catch = &Catch{
+			Block: catch_block,
+			Ident: *catch_ident,
+		}
+	}
+
+	finally_kwd := ts.ParseExact(0, "finally")
+	var finally_block *Block
+	if finally_kwd != nil {
+		ts.Move(1)
+		fb, err := ts.ParseBlock()
+		if err != nil {
+			ts.Restore()
+			return TryCatch{}, err
+		}
+		finally_block = &fb
+	}
+
+	ts.Commit()
+	return TryCatch{
+		Base:         Base{AST_TRY_CATCH},
+		kwd:          try_kwd,
+		TryBlock:     try_block,
+		CatchBlock:   catch,
+		FinallyBlock: finally_block,
+	}, err
 }
 
 func (ts *Scanner) ParseWhileLoop() (BlockStmt, error) {
