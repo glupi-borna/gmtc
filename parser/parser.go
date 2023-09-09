@@ -45,6 +45,7 @@ const (
 	T_LEQ
 	T_GEQ
 	T_EQ
+	T_NEQ
 	T_LESS
 	T_MORE
 
@@ -96,6 +97,7 @@ var literal_tokens = []LToken{
 	{"<=", T_LEQ},
 	{">=", T_GEQ},
 	{"==", T_EQ},
+	{"!=", T_NEQ},
 	{"||", T_OR},
 	{"&&", T_AND},
 	{"+=", T_ASSIGN_ADD},
@@ -580,6 +582,16 @@ func (ts Tokens) Clean(macros map[string]Macro) Tokens {
 				continue
 			}
 			ts = slices.Delete(ts, i, i+macro.RawTokensLength)
+		}
+
+		if ts[i].Type == T_HASH && (ts.MatchValueAt(i+1, "region") || ts.MatchValueAt(i+1, "endregion")) {
+			t := ts[i]
+			to_delete := 0
+			for t.Type != T_NEWLINE && t.Type != T_EOF {
+				to_delete++
+				t = ts[i+to_delete]
+			}
+			ts = slices.Delete(ts, i, i+to_delete)
 		}
 	}
 	return ts

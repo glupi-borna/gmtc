@@ -6,12 +6,14 @@ import (
 	p "gmtc/parser"
 	"reflect"
 	"strings"
+	// "runtime/debug"
 )
 
 type Scanner struct {
 	Tokens p.Tokens
 	Index  int
 	Saved  []int
+	Furthest int
 }
 
 func (ts *Scanner) At(offset int) *p.Token {
@@ -26,6 +28,7 @@ func (ts *Scanner) At(offset int) *p.Token {
 
 func (ts *Scanner) Move(amount int) {
 	ts.Index += amount
+	ts.Furthest = max(ts.Index, ts.Furthest)
 }
 
 func (ts *Scanner) Save() {
@@ -100,6 +103,7 @@ const (
 	AST_WHILE
 	AST_DOUNTIL
 	AST_REPEAT
+	AST_WITH
 
 	AST_RETURN
 	AST_CONTINUE
@@ -109,6 +113,7 @@ const (
 type NodeBuilder struct {
 	b      strings.Builder
 	indent int
+	nl bool
 }
 
 type NodeField struct {
@@ -120,31 +125,38 @@ func (nb *NodeBuilder) Indent() { nb.indent++ }
 func (nb *NodeBuilder) Dedent() { nb.indent-- }
 
 func (nb *NodeBuilder) Write(text string) {
+	nb.nl = false
 	nb.b.WriteString(text)
 }
 
-func (nb *NodeBuilder) WriteIndent() {
-	nb.b.WriteString(strings.Repeat(".   ", nb.indent))
+func (nb *NodeBuilder) WriteIndent(line bool) {
+	nb.nl = false
+	if nb.indent == 0 { return }
+
+	if line {
+		nb.b.WriteString(strings.Repeat("|   ", nb.indent-1))
+		nb.b.WriteString("|---")
+	} else {
+		nb.b.WriteString(strings.Repeat("|   ", nb.indent))
+	}
 }
 
-func (nb *NodeBuilder) Newline() { nb.b.WriteByte('\n') }
-
-func (nb *NodeBuilder) WriteLine(text string) {
-	nb.WriteIndent()
-	nb.Write(text)
+func (nb *NodeBuilder) Newline() {
+	if nb.nl == true { return }
 	nb.b.WriteByte('\n')
+	nb.nl = true
 }
 
 func (nb *NodeBuilder) WriteFields(fields ...NodeField) {
+	nb.Newline()
 	for _, field := range fields {
-		nb.WriteIndent()
-		nb.Write(".")
+		nb.WriteIndent(false)
+		nb.Write("+")
 		nb.Write(field.Name)
 
 		rv := reflect.ValueOf(field.Value)
 		if rv.IsZero() {
-			nb.Write(" -")
-			nb.Newline()
+			nb.Write(": -")
 			continue
 		}
 
@@ -154,32 +166,34 @@ func (nb *NodeBuilder) WriteFields(fields ...NodeField) {
 			nb.Indent()
 			v.Render(nb)
 			nb.Dedent()
-			break
 
 		case Block:
 			nb.Newline()
 			nb.Indent()
 			v.Render(nb)
 			nb.Dedent()
-			break
 
 		case []Node:
+			nb.Write("(")
+			nb.Write(fmt.Sprint(len(v)))
+			nb.Write(")")
 			nb.Indent()
 			for _, n := range v {
 				nb.Newline()
 				n.Render(nb)
 			}
 			nb.Dedent()
-			break
 
 		case []Statement:
+			nb.Write("(")
+			nb.Write(fmt.Sprint(len(v)))
+			nb.Write(")")
 			nb.Indent()
 			for _, n := range v {
 				nb.Newline()
 				n.Render(nb)
 			}
 			nb.Dedent()
-			break
 
 		case []Arg:
 			nb.Write("(")
@@ -191,23 +205,39 @@ func (nb *NodeBuilder) WriteFields(fields ...NodeField) {
 				n.Render(nb)
 			}
 			nb.Dedent()
-			break
+
+		case p.Token:
+			nb.Write(": ")
+			nb.Write(v.Value)
+
+		case *p.Token:
+			nb.Write(": ")
+			nb.Write(v.Value)
+
+		case string:
+			nb.Write(": ")
+			nb.Write(v)
 
 		default:
 			nb.Newline()
 			nb.Indent()
-			nb.WriteIndent()
+			nb.WriteIndent(false)
 			nb.Write(fmt.Sprintf("%v", v))
 			nb.Dedent()
-			break
 		}
-
 		nb.Newline()
 	}
 }
 
+func NodeString(n Node) string {
+	nb := &NodeBuilder{}
+	n.Render(nb)
+	return nb.String()
+}
+
 func (nb *NodeBuilder) RenderNode(b *Base, fields ...NodeField) {
-	nb.WriteIndent()
+	nb.Newline()
+	nb.WriteIndent(true)
 	nb.Write(b.Type.String())
 	nb.Newline()
 	nb.WriteFields(fields...)
@@ -221,10 +251,15 @@ type Node interface {
 	Start() p.Location
 	End() p.Location
 	Render(*NodeBuilder)
+	ASTType() AST_TYPE
 }
 
 type Base struct {
 	Type AST_TYPE
+}
+
+func (b *Base) ASTType() AST_TYPE {
+	return b.Type
 }
 
 type ScriptNode struct {
@@ -268,8 +303,8 @@ func ParseAST(tokens p.Tokens) (ScriptNode, error) {
 
 	stmts := ts.ParseStatements()
 
-	t := ts.At(0)
-	if t != nil && t.Type != p.T_EOF {
+	t := ts.Tokens[ts.Furthest]
+	if t.Type != p.T_EOF {
 		return ScriptNode{}, fmt.Errorf("Failed at token %v at %v:%v\n", t, t.Loc.Line+1, t.Loc.Char+1)
 	}
 
@@ -327,12 +362,14 @@ func (ts *Scanner) ParseStatements() []Statement {
 }
 
 func (ts *Scanner) EatSemicolon() {
-	if ts.ParseType(0, p.T_SEMICOLON) != nil {
+	for ts.ParseType(0, p.T_SEMICOLON) != nil {
 		ts.Move(1)
 	}
 }
 
 func (ts *Scanner) ParseStatement() Statement {
+	ts.EatSemicolon()
+
 	if stmt, err := ts.ParseAssign(); err == nil {
 		ts.EatSemicolon()
 		return &stmt
@@ -354,6 +391,16 @@ func (ts *Scanner) ParseStatement() Statement {
 	}
 
 	if stmt, err := ts.ParseWhileLoop(); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
+	if stmt, err := ts.ParseWithStmt(); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
+	if stmt, err := ts.ParseRepeatLoop(); err == nil {
 		ts.EatSemicolon()
 		return &stmt
 	}
@@ -459,6 +506,7 @@ func (ts *Scanner) ParseVarDecl() (VarDecl, error) {
 	defer ts.GuardEnd(g)
 
 	kwd := ts.ParseExact(0, "var")
+	if kwd == nil { ts.ParseExact(0, "static") }
 	name := ts.ParseType(1, p.T_IDENT)
 
 	if kwd == nil || name == nil {
@@ -1107,6 +1155,7 @@ type Access struct {
 	Type          *p.Token
 	Value         Node
 	Access        Node
+	SecondAccess  Node
 }
 
 func (a *Access) Render(nb *NodeBuilder) {
@@ -1124,6 +1173,7 @@ func (a *Access) End() p.Location   { return a.closingSquare.Loc }
 func (ts *Scanner) ParseAccess(val Node) (Node, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
+
 
 	opening := ts.ParseAnyType(0,
 		p.T_ACC_ARRAY,
@@ -1146,7 +1196,20 @@ func (ts *Scanner) ParseAccess(val Node) (Node, error) {
 		return nil, errors.New("Missing access")
 	}
 
-	closing := ts.ParseType(0, p.T_LSQUARE)
+	var second_access Node
+	if opening.Type == p.T_ACC_GRID {
+		if ts.ParseType(0, p.T_COMMA) != nil {
+			ts.Move(1)
+			second_access, err = ts.ParseExpr(nil)
+			if err != nil {
+				ts.Restore()
+				return nil, errors.New("Missing access")
+			}
+		}
+
+	}
+
+	closing := ts.ParseType(0, p.T_RSQUARE)
 	if closing == nil {
 		ts.Restore()
 		return nil, errors.New("Missing closing square brace")
@@ -1160,6 +1223,7 @@ func (ts *Scanner) ParseAccess(val Node) (Node, error) {
 		Type:          opening,
 		Value:         val,
 		Access:        access,
+		SecondAccess:  second_access,
 	})
 }
 
@@ -1211,9 +1275,6 @@ func (ts *Scanner) ParseUnop() (Unop, error) {
 
 func (ts *Scanner) ParseUnopPostfix(val Node) (Unop, error) {
 	op := ts.ParseAnyType(0,
-		p.T_MINUS,
-		p.T_EXCLAM,
-		p.T_BITNOT,
 		p.T_DECREMENT,
 		p.T_INCREMENT,
 	)
@@ -1402,8 +1463,8 @@ func (ts *Scanner) ParseBlockStmt(kwd_str string, t AST_TYPE) (BlockStmt, error)
 	var body Node
 	b, err := ts.ParseBlock()
 	if err != nil {
-		body, err = ts.ParseExpr(nil)
-		if err != nil {
+		body = ts.ParseStatement()
+		if body == nil {
 			ts.Restore()
 			return BlockStmt{}, err
 		}
@@ -1423,7 +1484,7 @@ func (ts *Scanner) ParseBlockStmt(kwd_str string, t AST_TYPE) (BlockStmt, error)
 type IfStmt struct {
 	BlockStmt
 	Elseifs []BlockStmt
-	Else    *BlockStmt
+	Else    *Block
 }
 
 func (i *IfStmt) End() p.Location {
@@ -1476,13 +1537,15 @@ func (ts *Scanner) ParseIfStmt() (IfStmt, error) {
 		elifs = append(elifs, elif)
 	}
 
-	var else_block *BlockStmt
+	var else_block *Block
 	if ts.ParseExact(0, "else") != nil {
-		eb, err := ts.ParseBlockStmt("else", AST_ELSE)
+		ts.Move(1)
+		eb, err := ts.ParseBlock()
 		if err != nil {
 			ts.Restore()
 			return IfStmt{}, err
 		}
+		eb.Base.Type = AST_ELSE
 		else_block = &eb
 	}
 
@@ -1589,3 +1652,12 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 func (ts *Scanner) ParseWhileLoop() (BlockStmt, error) {
 	return ts.ParseBlockStmt("while", AST_WHILE)
 }
+
+func (ts *Scanner) ParseWithStmt() (BlockStmt, error) {
+	return ts.ParseBlockStmt("with", AST_WITH)
+}
+
+func (ts *Scanner) ParseRepeatLoop() (BlockStmt, error) {
+	return ts.ParseBlockStmt("repeat", AST_REPEAT)
+}
+
