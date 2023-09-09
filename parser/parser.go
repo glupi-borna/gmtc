@@ -52,11 +52,13 @@ const (
 	T_PLUS
 	T_MINUS
 	T_DIV
+	T_INTDIV
 	T_MUL
 	T_MOD
 
 	T_OR
 	T_AND
+	T_NULLISH
 
 	T_BITOR
 	T_BITAND
@@ -70,6 +72,7 @@ const (
 	T_ASSIGN_SUB
 	T_ASSIGN_MUL
 	T_ASSIGN_DIV
+	T_ASSIGN_NULLISH
 
 	T_DECREMENT
 	T_INCREMENT
@@ -89,6 +92,7 @@ type LToken struct {
 var literal_tokens = []LToken{
 	{"\r\n", T_NEWLINE},
 
+	{"??=", T_ASSIGN_NULLISH},
 	{"[|", T_ACC_LIST},
 	{"[?", T_ACC_MAP},
 	{"[#", T_ACC_GRID},
@@ -104,6 +108,7 @@ var literal_tokens = []LToken{
 	{"-=", T_ASSIGN_SUB},
 	{"*=", T_ASSIGN_MUL},
 	{"/=", T_ASSIGN_DIV},
+	{"??", T_NULLISH},
 
 	{"--", T_DECREMENT},
 	{"++", T_INCREMENT},
@@ -335,6 +340,7 @@ func (s *scanner) parseNumber() (Token, error) {
 			if !dot && char == '.' {
 				dot = true
 				s.move()
+				continue
 			}
 
 			break

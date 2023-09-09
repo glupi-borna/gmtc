@@ -46,37 +46,32 @@ function make_game() {
     }
 
     if (_is_krutidev) _font_data.__is_krutidev = true;
+    var _unicode = is_real(_character)? _character : ord(_character);
+
+    if (_colourDict[$ _name] != _colour)
+    {
+        _colourDict[$ _name] = _colour;
+
+        //Ensure that any custom colours that are in text elements are updated
+        scribble_refresh_everything();
+    }
+
+
+    function __scribble_class_event(_name, _data) constructor
+    {
+        //These are publicly exposed via .get_events()
+        name            = _name;
+        data            = _data;
+        position        = undefined; //Legacy
+        character_index = undefined;
+        line_index      = undefined;
+    }
+
+    static __error = function()
+    {
+        __scribble_error("Cannot call text element methods using the result from .draw()\nThis can occur in two situations:\n  1. scribble().draw().method();\n  2. t = scribble().draw(); t.method()\n\nInstead use:\n  1. scribble().method().draw();\n  2. t = scribble(); t.method(); t.draw();");
+    }
+
+    var _glyph_index = _map[? 0x20];
+    vertex_color(_vbuff, c_white, 1.0);
 }
-
-
-
-#macro __SCRIBBLE_PARSER_WRITE_GLYPH  ;\//Pull info out of the font's data structures
-                                      ;\//We floor this value to work around floating point issues on HTML5
-                                      var _data_index = _font_glyphs_map[? floor(_glyph_write)];\
-                                      ;\//If our glyph is missing, choose the missing character glyph instead!
-                                      if (_data_index == undefined)\
-                                      {\
-                                          __scribble_trace("Couldn't find glyph data for character code " + string(_glyph_write) + " (" + chr(_glyph_write) + ") in font \"" + string(_font_name) + "\"");\
-                                          _data_index = _font_glyphs_map[? ord(SCRIBBLE_MISSING_CHARACTER)];\
-                                      }\
-                                      if (_data_index == undefined)\
-                                      {\
-                                          ;\//This should only happen if SCRIBBLE_MISSING_CHARACTER is missing for a font
-                                          __scribble_trace("Couldn't find \"missing character\" glyph data, character code " + string(ord(SCRIBBLE_MISSING_CHARACTER)) + " (" + string(SCRIBBLE_MISSING_CHARACTER) + ") in font \"" + string(_font_name) + "\"");\
-                                      }\
-                                      else\
-                                      {\
-                                          ;\//Add this glyph to our grid by copying from the font's own glyph data grid
-                                          ds_grid_set_grid_region(_glyph_grid, _font_glyph_data_grid, _data_index, SCRIBBLE_GLYPH.UNICODE, _data_index, SCRIBBLE_GLYPH.BILINEAR, _glyph_count, __SCRIBBLE_GEN_GLYPH.__UNICODE);\
-                                          _glyph_grid[# _glyph_count, __SCRIBBLE_GEN_GLYPH.__CONTROL_COUNT] = _control_count;\
-                                          ;\
-                                          if (SCRIBBLE_USE_KERNING)\
-                                          {\
-                                              var _kerning = _font_kerning_map[? ((_glyph_write & 0xFFFF) << 16) | (_glyph_prev & 0xFFFF)];\
-                                              if (_kerning != undefined) _glyph_grid[# _glyph_count-1, __SCRIBBLE_GEN_GLYPH.__SEPARATION] += _kerning;\
-                                          }\
-                                          ;\
-                                          __SCRIBBLE_PARSER_NEXT_GLYPH\
-                                      }
-
-__SCRIBBLE_PARSER_WRITE_GLYPH

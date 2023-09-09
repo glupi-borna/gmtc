@@ -19,7 +19,7 @@ func IsWhitespaceNoNL(char byte) bool {
 }
 
 func IsHexNumber(char byte) bool {
-	return IsNumber(char) || IsBetween(char, 'a', 'f') || IsBetween(char, 'A', 'f')
+	return IsNumber(char) || IsBetween(char, 'a', 'f') || IsBetween(char, 'A', 'F')
 }
 
 func IsNumber(char byte) bool {

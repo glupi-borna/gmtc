@@ -10,9 +10,9 @@ import (
 )
 
 type Scanner struct {
-	Tokens p.Tokens
-	Index  int
-	Saved  []int
+	Tokens   p.Tokens
+	Index    int
+	Saved    []int
 	Furthest int
 }
 
@@ -86,6 +86,7 @@ const (
 	AST_CALL
 	AST_ACCESS
 	AST_ATTR
+	AST_TERNARY
 
 	AST_BLOCK
 
@@ -113,7 +114,7 @@ const (
 type NodeBuilder struct {
 	b      strings.Builder
 	indent int
-	nl bool
+	nl     bool
 }
 
 type NodeField struct {
@@ -131,7 +132,9 @@ func (nb *NodeBuilder) Write(text string) {
 
 func (nb *NodeBuilder) WriteIndent(line bool) {
 	nb.nl = false
-	if nb.indent == 0 { return }
+	if nb.indent == 0 {
+		return
+	}
 
 	if line {
 		nb.b.WriteString(strings.Repeat("|   ", nb.indent-1))
@@ -142,7 +145,9 @@ func (nb *NodeBuilder) WriteIndent(line bool) {
 }
 
 func (nb *NodeBuilder) Newline() {
-	if nb.nl == true { return }
+	if nb.nl == true {
+		return
+	}
 	nb.b.WriteByte('\n')
 	nb.nl = true
 }
@@ -155,8 +160,15 @@ func (nb *NodeBuilder) WriteFields(fields ...NodeField) {
 		nb.Write(field.Name)
 
 		rv := reflect.ValueOf(field.Value)
+		if !rv.IsValid() {
+			nb.Write(": -")
+			nb.Newline()
+			continue
+		}
+
 		if rv.IsZero() {
 			nb.Write(": -")
+			nb.Newline()
 			continue
 		}
 
@@ -410,6 +422,16 @@ func (ts *Scanner) ParseStatement() Statement {
 		return &stmt
 	}
 
+	if stmt, err := ts.ParseKwdStmt("new", AST_RETURN, VT_OPTIONAL); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
+	if stmt, err := ts.ParseKwdStmt("delete", AST_RETURN, VT_OPTIONAL); err == nil {
+		ts.EatSemicolon()
+		return &stmt
+	}
+
 	if stmt, err := ts.ParseKwdStmt("continue", AST_CONTINUE, VT_NONE); err == nil {
 		ts.EatSemicolon()
 		return &stmt
@@ -420,7 +442,7 @@ func (ts *Scanner) ParseStatement() Statement {
 		return &stmt
 	}
 
-	if stmt, err := ts.ParseFuncDecl(); err == nil {
+	if stmt, err := ts.ParseFuncDecl(false); err == nil {
 		ts.EatSemicolon()
 		return &stmt
 	}
@@ -506,7 +528,9 @@ func (ts *Scanner) ParseVarDecl() (VarDecl, error) {
 	defer ts.GuardEnd(g)
 
 	kwd := ts.ParseExact(0, "var")
-	if kwd == nil { ts.ParseExact(0, "static") }
+	if kwd == nil {
+		ts.ParseExact(0, "static")
+	}
 	name := ts.ParseType(1, p.T_IDENT)
 
 	if kwd == nil || name == nil {
@@ -520,6 +544,7 @@ func (ts *Scanner) ParseVarDecl() (VarDecl, error) {
 	var err error = nil
 
 	eq := ts.ParseType(0, p.T_ASSIGN)
+
 	if eq != nil {
 		ts.Move(1)
 		value, err = ts.ParseExpr(nil)
@@ -559,6 +584,7 @@ func (ts *Scanner) ParseAssign() (Assign, error) {
 		p.T_ASSIGN_SUB,
 		p.T_ASSIGN_DIV,
 		p.T_ASSIGN_MUL,
+		p.T_ASSIGN_NULLISH,
 	)
 	if eq == nil {
 		ts.Restore()
@@ -586,10 +612,13 @@ func (ts *Scanner) ParseAssign() (Assign, error) {
 
 type FuncDecl struct {
 	Base
-	keyword *p.Token
-	Name    *p.Token
-	Args    []Arg
-	Body    Block
+	keyword       *p.Token
+	Name          *p.Token
+	IsAnonymous     bool
+	IsConstructor bool
+	Parent        *Call
+	Args          []Arg
+	Body          Block
 }
 
 func (fn *FuncDecl) Start() p.Location { return fn.keyword.Loc }
@@ -598,29 +627,76 @@ func (fn *FuncDecl) End() p.Location   { return fn.Body.End() }
 func (fn *FuncDecl) Render(nb *NodeBuilder) {
 	nb.RenderNode(
 		&fn.Base,
-		NodeField{"Name", fn.Name.Value},
+		NodeField{"Name", fn.Name},
 		NodeField{"Args", fn.Args},
+		NodeField{"IsAnonymous", fn.IsAnonymous},
+		NodeField{"Parent", fn.Parent},
+		NodeField{"IsConstructor", fn.IsConstructor},
 		NodeField{"Body", fn.Body},
 	)
 }
 
-func (ts *Scanner) ParseFuncDecl() (FuncDecl, error) {
+func (ts *Scanner) ParseFuncDecl(anonymous bool) (FuncDecl, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
 	kwd := ts.ParseExact(0, "function")
-	name := ts.ParseType(1, p.T_IDENT)
-	if kwd == nil || name == nil {
-		return FuncDecl{}, errors.New("Not a function node")
-	}
 
-	ts.Save()
-	ts.Move(2)
+	var name *p.Token
+
+	if anonymous {
+		if kwd == nil {
+			return FuncDecl{}, errors.New("Not a function")
+		}
+		ts.Save()
+		ts.Move(1)
+
+	} else {
+		name := ts.ParseType(1, p.T_IDENT)
+		if kwd == nil || name == nil {
+			return FuncDecl{}, errors.New("Not a function")
+		}
+
+		ts.Save()
+		ts.Move(2)
+	}
 
 	args, err := ts.ParseArgs()
 	if err != nil {
 		ts.Restore()
 		return FuncDecl{}, err
+	}
+
+	is_constructor := false
+	var parent *Call
+
+	if ts.ParseType(0, p.T_COLON) != nil {
+		ts.Move(1)
+		is_constructor = true
+
+		expr, err := ts.ParseExprPart()
+		if err != nil {
+			ts.Restore()
+			return FuncDecl{}, err
+		}
+
+		call, err := ts.ParseCall(expr)
+		if err != nil {
+			ts.Restore()
+			return FuncDecl{}, err
+		}
+
+		var ok bool
+		parent, ok = call.(*Call)
+		if !ok {
+			ts.Restore()
+			return FuncDecl{}, err
+		}
+	}
+
+	if ts.ParseExact(0, "constructor") != nil {
+		ts.Move(1)
+		is_constructor = true
 	}
 
 	body, err := ts.ParseBlock()
@@ -631,11 +707,13 @@ func (ts *Scanner) ParseFuncDecl() (FuncDecl, error) {
 
 	ts.Commit()
 	return FuncDecl{
-		Base:    Base{AST_FUNC_DECL},
-		keyword: kwd,
-		Name:    name,
-		Args:    args,
-		Body:    body,
+		Base:          Base{AST_FUNC_DECL},
+		keyword:       kwd,
+		Name:          name,
+		Args:          args,
+		IsConstructor: is_constructor,
+		Parent:        parent,
+		Body:          body,
 	}, nil
 }
 
@@ -755,6 +833,11 @@ func (ts *Scanner) ParseExpr(expr_or_nil Node) (Node, error) {
 		return ts.ParseExpr(&unop)
 	}
 
+	tern, err := ts.ParseTernary(expr)
+	if err == nil {
+		return ts.ParseExpr(&tern)
+	}
+
 	attr, err := ts.ParseAttr(expr)
 	if err == nil {
 		return ts.ParseExpr(attr)
@@ -785,6 +868,11 @@ func (ts *Scanner) ParseExprPart() (Node, error) {
 	lit, err := ts.ParseLiteral()
 	if err == nil {
 		return lit, nil
+	}
+
+	fn, err := ts.ParseFuncDecl(true)
+	if err == nil {
+		return &fn, nil
 	}
 
 	ident, err := ts.ParseIdent()
@@ -1174,7 +1262,6 @@ func (ts *Scanner) ParseAccess(val Node) (Node, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
-
 	opening := ts.ParseAnyType(0,
 		p.T_ACC_ARRAY,
 		p.T_ACC_GRID,
@@ -1323,13 +1410,56 @@ func (ts *Scanner) ParseBinop(left Node) (Binop, error) {
 		p.T_LEQ,
 		p.T_GEQ,
 		p.T_EQ,
+		p.T_NEQ,
 		p.T_LESS,
 		p.T_MORE,
 		p.T_LSHIFT,
 		p.T_RSHIFT,
+		p.T_NULLISH,
 	)
 	if op == nil {
-		return Binop{}, errors.New("Missing operator")
+		ident_op := ts.ParseType(0, p.T_IDENT)
+
+		if ident_op == nil {
+			return Binop{}, errors.New("Missing operator")
+		}
+
+		switch ident_op.Value {
+		case "and":
+			op = &p.Token{
+				Type:  p.T_AND,
+				Value: ident_op.Value,
+				Loc:   ident_op.Loc,
+				Flags: ident_op.Flags,
+			}
+		case "or":
+			op = &p.Token{
+				Type:  p.T_OR,
+				Value: ident_op.Value,
+				Loc:   ident_op.Loc,
+				Flags: ident_op.Flags,
+			}
+		case "mod":
+			op = &p.Token{
+				Type:  p.T_MOD,
+				Value: ident_op.Value,
+				Loc:   ident_op.Loc,
+				Flags: ident_op.Flags,
+			}
+		case "div":
+			op = &p.Token{
+				Type:  p.T_INTDIV,
+				Value: ident_op.Value,
+				Loc:   ident_op.Loc,
+				Flags: ident_op.Flags,
+			}
+		default:
+			return Binop{}, errors.New("Missing operator")
+		}
+
+		if op == nil {
+			return Binop{}, errors.New("Missing operator")
+		}
 	}
 
 	ts.Save()
@@ -1347,6 +1477,65 @@ func (ts *Scanner) ParseBinop(left Node) (Binop, error) {
 		Op:    op,
 		Left:  left,
 		Right: right,
+	}, nil
+}
+
+type Ternary struct {
+	Base
+	Cond    Node
+	OnTrue  Node
+	OnFalse Node
+}
+
+func (t *Ternary) Start() p.Location { return t.Cond.Start() }
+func (t *Ternary) End() p.Location   { return t.OnFalse.End() }
+
+func (t *Ternary) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&t.Base,
+		NodeField{"Cond", t.Cond},
+		NodeField{"OnTrue", t.OnTrue},
+		NodeField{"OnFalse", t.OnFalse},
+	)
+}
+
+func (ts *Scanner) ParseTernary(cond Node) (Ternary, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	qmark := ts.ParseType(0, p.T_QUESTION)
+	if qmark == nil {
+		return Ternary{}, errors.New("Missing question mark")
+	}
+
+	ts.Save()
+	ts.Move(1)
+
+	ontrue, err := ts.ParseExpr(nil)
+	if err != nil {
+		ts.Restore()
+		return Ternary{}, err
+	}
+
+	colon := ts.ParseType(0, p.T_COLON)
+	if colon == nil {
+		ts.Restore()
+		return Ternary{}, errors.New("Missing colon")
+	}
+	ts.Move(1)
+
+	onfalse, err := ts.ParseExpr(nil)
+	if err != nil {
+		ts.Restore()
+		return Ternary{}, err
+	}
+
+	ts.Commit()
+	return Ternary{
+		Base:    Base{AST_TERNARY},
+		Cond:    cond,
+		OnTrue:  ontrue,
+		OnFalse: onfalse,
 	}, nil
 }
 
@@ -1587,8 +1776,9 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 
 	kwd := ts.ParseExact(0, "for")
 	op := ts.ParseType(1, p.T_LPAREN)
+	var_kwd := ts.ParseExact(2, "var")
 
-	if kwd == nil || op == nil {
+	if kwd == nil || op == nil || var_kwd == nil {
 		ts.Restore()
 		return ForLoop{}, errors.New("Not a for loop")
 	}
@@ -1660,4 +1850,3 @@ func (ts *Scanner) ParseWithStmt() (BlockStmt, error) {
 func (ts *Scanner) ParseRepeatLoop() (BlockStmt, error) {
 	return ts.ParseBlockStmt("repeat", AST_REPEAT)
 }
-
