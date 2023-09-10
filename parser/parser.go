@@ -72,6 +72,8 @@ const (
 	T_ASSIGN_SUB
 	T_ASSIGN_MUL
 	T_ASSIGN_DIV
+	T_ASSIGN_OR
+	T_ASSIGN_AND
 	T_ASSIGN_NULLISH
 
 	T_DECREMENT
@@ -83,6 +85,13 @@ const (
 
 	T_EOF
 )
+
+func (t TOKEN_TYPE) IsAny(types []TOKEN_TYPE) bool {
+	for _, tt := range types {
+		if t == tt { return true }
+	}
+	return false
+}
 
 type LToken struct {
 	Value string
@@ -108,6 +117,8 @@ var literal_tokens = []LToken{
 	{"-=", T_ASSIGN_SUB},
 	{"*=", T_ASSIGN_MUL},
 	{"/=", T_ASSIGN_DIV},
+	{"|=", T_ASSIGN_OR},
+	{"&=", T_ASSIGN_AND},
 	{"??", T_NULLISH},
 
 	{"--", T_DECREMENT},
@@ -162,6 +173,14 @@ type Token struct {
 	Flags TOKEN_FLAG
 }
 
+func (t Token) IsAny(strs ...string) bool {
+	if t.Type != T_IDENT { return false }
+	for _, s := range strs {
+		if t.Value == s { return true }
+	}
+	return false
+}
+
 type Tokens []Token
 
 func (t Token) String() string {
@@ -213,7 +232,12 @@ func (s *scanner) char() byte {
 	if s.Loc.Index >= len(s.Text) {
 		return EOF
 	}
-	return s.Text[s.Loc.Index]
+	// Multibyte compatibility
+	ch := s.Text[s.Loc.Index]
+	if ch > 127 {
+		return 'a'
+	}
+	return ch
 }
 
 func (s *scanner) move() {
@@ -287,7 +311,10 @@ func (s *scanner) eatWhitespace() bool {
 
 func (s *scanner) skip() {
 	for {
-		if !s.eatWhitespace() && !s.eatLineComments() && !s.eatBlockComments() {
+		if !s.eatWhitespace() &&
+			!s.eatLineComments() &&
+			!s.eatBlockComments() &&
+			!s.eatRegions() {
 			return
 		}
 	}
@@ -498,7 +525,6 @@ type Macro struct {
 	Name, Config    string
 	Value           Tokens
 	RawTokensLength int
-	NewLines        int
 }
 
 func (ts Tokens) ExtractMacros() map[string]Macro {
@@ -555,8 +581,7 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 			Name:            macro_name,
 			Config:          macro_config,
 			Value:           macro_value,
-			RawTokensLength: i - macro_start - macro_newlines,
-			NewLines:        macro_newlines,
+			RawTokensLength: i - macro_start,
 		}
 	}
 
@@ -573,7 +598,7 @@ func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
 			continue
 		}
 		if ts.MatchTypeAt(i-2, T_HASH) || ts.MatchTypeAt(i-4, T_HASH) {
-			i += macro.RawTokensLength + macro.NewLines
+			i += macro.RawTokensLength
 			continue
 		}
 		ts = slices.Replace(ts, i, i+1, macro.Value...)
@@ -582,13 +607,13 @@ func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
 }
 
 func (ts Tokens) Clean(macros map[string]Macro) Tokens {
-	for i := len(ts) - 1; i >= 0; i-- {
+	for i := 0; i < len(ts); i++ {
 		if ts[i].Type == T_NEWLINE {
+			// fmt.Println(ts[i].Loc.Line+1, "Remove newline", ts[i])
 			ts = slices.Delete(ts, i, i+1)
-			continue
-		}
+			i--
 
-		if ts[i].Type == T_HASH && ts.MatchValueAt(i+1, "macro") {
+		} else if ts[i].Type == T_HASH && ts.MatchValueAt(i+1, "macro") {
 			macro_token := ts[i+2]
 			if ts.MatchTypeAt(i+3, T_COLON) {
 				macro_token = ts[i+4]
@@ -597,19 +622,21 @@ func (ts Tokens) Clean(macros map[string]Macro) Tokens {
 			if !ok {
 				continue
 			}
+			// fmt.Println(ts[i].Loc.Line+1, "Remove macro", ts[i])
 			ts = slices.Delete(ts, i, i+macro.RawTokensLength)
-		}
+			i--
+		} else {
+			// fmt.Println(ts[i].Loc.Line+1, "Skip", ts[i])
 
-		if ts[i].Type == T_HASH && (ts.MatchValueAt(i+1, "region") || ts.MatchValueAt(i+1, "endregion")) {
-			t := ts[i]
-			to_delete := 0
-			for t.Type != T_NEWLINE && t.Type != T_EOF {
-				to_delete++
-				t = ts[i+to_delete]
-			}
-			ts = slices.Delete(ts, i, i+to_delete)
 		}
 	}
+
+	for _, t := range ts {
+		if t.Type == T_BACKSLASH { panic(fmt.Sprint(t, t.Loc.Line+1)) }
+		if t.Type == T_NEWLINE { panic(fmt.Sprint(t, t.Loc.Line+1)) }
+		if t.Type == T_HASH { panic(fmt.Sprint(t, t.Loc.Line+1)) }
+	}
+
 	return ts
 }
 

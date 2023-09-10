@@ -32,17 +32,25 @@ func (ts *Scanner) Move(amount int) {
 	ts.Furthest = max(ts.Index, ts.Furthest)
 }
 
-func PrintCaller(prefix string, indent int, depth int, suffix... any) {
+func name(n string) string {
+	ns := strings.Split(n, ".")
+	return strings.TrimPrefix(ns[len(ns)-1], "Parse")
+}
+
+var callers = make([]string, 0)
+
+func PrintCaller(prefix string, indent int, depth int, suffix ...any) {
 	if false {
-		caller, _, _, ok := runtime.Caller(1+depth)
+		caller, _, _, ok := runtime.Caller(1 + depth)
 		if ok {
 			d := runtime.FuncForPC(caller)
 			args := []any{
 				strings.Repeat("|  ", indent),
 				prefix,
-				d.Name(),
+				name(d.Name()),
 			}
 			args = append(args, suffix...)
+			callers = append(callers, fmt.Sprintln(args...))
 			fmt.Println(args...)
 		}
 	}
@@ -72,7 +80,7 @@ func (ts *Scanner) Commit() {
 }
 
 func (ts *Scanner) GuardStart() int {
-	PrintCaller("Entering", len(ts.Saved), 1, ts.At(0))
+	PrintCaller("Entering", len(ts.Saved), 1, ts.At(0), ts.At(0).Loc.Line+1)
 	return len(ts.Saved)
 }
 
@@ -99,6 +107,7 @@ const (
 	AST_LITERAL_ARRAY
 	AST_LITERAL_STRUCT
 
+	AST_ENUM
 	AST_STRUCT_FIELD
 
 	AST_BINOP
@@ -119,7 +128,6 @@ const (
 
 	AST_IF
 	AST_ELIF
-	AST_ELSE
 
 	AST_FOR
 	AST_WHILE
@@ -388,7 +396,7 @@ func (ts *Scanner) ParseAnyType(offset int, tts ...p.TOKEN_TYPE) *p.Token {
 	return nil
 }
 
-func Map[IN any, OUT any](arr []IN, fn func(IN)OUT) []OUT {
+func Map[IN any, OUT any](arr []IN, fn func(IN) OUT) []OUT {
 	out := make([]OUT, len(arr))
 	for i, it := range arr {
 		out[i] = fn(it)
@@ -421,82 +429,127 @@ func (ts *Scanner) EatSemicolon() {
 func (ts *Scanner) ParseStatement() Statement {
 	ts.EatSemicolon()
 
+	t := ts.At(0)
+	if t.Type == p.T_IDENT {
+		switch t.Value {
+		case "var":
+			if stmt, err := ts.ParseVarDecl(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "if":
+			if stmt, err := ts.ParseIfStmt(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "for":
+			if stmt, err := ts.ParseForLoop(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "enum":
+			if stmt, err := ts.ParseEnum(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "while":
+			if stmt, err := ts.ParseWhileLoop(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "switch":
+			if stmt, err := ts.ParseSwitch(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "try":
+			if stmt, err := ts.ParseTryCatch(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "with":
+			if stmt, err := ts.ParseWithStmt(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "repeat":
+			if stmt, err := ts.ParseRepeatLoop(); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "return":
+			if stmt, err := ts.ParseKwdStmt("return", AST_RETURN, VT_OPTIONAL); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "new":
+			if stmt, err := ts.ParseKwdStmt("new", AST_RETURN, VT_OPTIONAL); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "delete":
+			if stmt, err := ts.ParseKwdStmt("delete", AST_RETURN, VT_OPTIONAL); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "continue":
+			if stmt, err := ts.ParseKwdStmt("continue", AST_CONTINUE, VT_NONE); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "break":
+			if stmt, err := ts.ParseKwdStmt("break", AST_BREAK, VT_NONE); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "function":
+			if stmt, err := ts.ParseFuncDecl(false); err == nil {
+				ts.EatSemicolon()
+				return &stmt
+			}
+			return nil
+
+		case "case":
+			return nil
+
+		case "default":
+			return nil
+
+		}
+	}
+
 	if stmt, err := ts.ParseAssign(); err == nil {
 		ts.EatSemicolon()
 		return &stmt
 	}
-
-	if stmt, err := ts.ParseVarDecl(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseIfStmt(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseForLoop(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseWhileLoop(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseSwitch(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseTryCatch(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseWithStmt(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseRepeatLoop(); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseKwdStmt("return", AST_RETURN, VT_OPTIONAL); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseKwdStmt("new", AST_RETURN, VT_OPTIONAL); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseKwdStmt("delete", AST_RETURN, VT_OPTIONAL); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseKwdStmt("continue", AST_CONTINUE, VT_NONE); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseKwdStmt("break", AST_BREAK, VT_NONE); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if stmt, err := ts.ParseFuncDecl(false); err == nil {
-		ts.EatSemicolon()
-		return &stmt
-	}
-
-	if ts.ParseExact(0, "case") != nil { return nil }
 
 	if expr_stmt, err := ts.ParseExpr(nil); err == nil {
 		ts.EatSemicolon()
@@ -635,6 +688,8 @@ func (ts *Scanner) ParseAssign() (Assign, error) {
 		p.T_ASSIGN_SUB,
 		p.T_ASSIGN_DIV,
 		p.T_ASSIGN_MUL,
+		p.T_ASSIGN_OR,
+		p.T_ASSIGN_ADD,
 		p.T_ASSIGN_NULLISH,
 	)
 	if eq == nil {
@@ -874,34 +929,48 @@ func (ts *Scanner) ParseExpr(expr_or_nil Node) (Node, error) {
 		panic("Nil expression")
 	}
 
-	binop, err := ts.ParseBinop(expr)
-	if err == nil {
-		return ts.ParseExpr(&binop)
+	t := ts.At(0)
+
+	if t.Type.IsAny(BINARY_OPERATOR_TOKENS) || t.IsAny("or", "and", "div", "mod") {
+		binop, err := ts.ParseBinop(expr)
+		if err == nil {
+			return ts.ParseExpr(&binop)
+		}
 	}
 
-	unop, err := ts.ParseUnopPostfix(expr)
-	if err == nil {
-		return ts.ParseExpr(&unop)
+	if t.Type.IsAny(POSTFIX_OPERATOR_TOKENS) {
+		unop, err := ts.ParseUnopPostfix(expr)
+		if err == nil {
+			return ts.ParseExpr(&unop)
+		}
 	}
 
-	tern, err := ts.ParseTernary(expr)
-	if err == nil {
-		return ts.ParseExpr(&tern)
+	if t.Type == p.T_QUESTION {
+		tern, err := ts.ParseTernary(expr)
+		if err == nil {
+			return ts.ParseExpr(&tern)
+		}
 	}
 
-	attr, err := ts.ParseAttr(expr)
-	if err == nil {
-		return ts.ParseExpr(attr)
+	if t.Type == p.T_DOT {
+		attr, err := ts.ParseAttr(expr)
+		if err == nil {
+			return ts.ParseExpr(attr)
+		}
 	}
 
-	call, err := ts.ParseCall(expr)
-	if err == nil {
-		return ts.ParseExpr(call)
+	if t.Type == p.T_LPAREN {
+		call, err := ts.ParseCall(expr)
+		if err == nil {
+			return ts.ParseExpr(call)
+		}
 	}
 
-	acc, err := ts.ParseAccess(expr)
-	if err == nil {
-		return ts.ParseExpr(acc)
+	if t.Type != p.T_STRING && len(t.Value) > 0 && t.Value[0] == '[' {
+		acc, err := ts.ParseAccess(expr)
+		if err == nil {
+			return ts.ParseExpr(acc)
+		}
 	}
 
 	return expr, nil
@@ -911,24 +980,42 @@ func (ts *Scanner) ParseExprPart() (Node, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
-	unop, err := ts.ParseUnop()
-	if err == nil {
-		return &unop, nil
+	t := ts.At(0)
+
+	if t.Type == p.T_IDENT {
+		if ts.ParseExact(0, "function") != nil {
+			fn, err := ts.ParseFuncDecl(true)
+			if err == nil {
+				return &fn, nil
+			}
+			return nil, errors.New("Expected a function")
+		}
+
+		if ts.ParseExact(0, "new") != nil {
+			if stmt, err := ts.ParseKwdStmt("new", AST_RETURN, VT_OPTIONAL); err == nil {
+				ts.EatSemicolon()
+				return &stmt, nil
+			}
+			return nil, errors.New("Expected an expression")
+		}
+
+		ident, err := ts.ParseIdent()
+		if err == nil {
+			return &ident, nil
+		}
+		return nil, err
+	}
+
+	if t.Type.IsAny(UNARY_OPERATOR_TOKENS) {
+		unop, err := ts.ParseUnop()
+		if err == nil {
+			return &unop, nil
+		}
 	}
 
 	lit, err := ts.ParseLiteral()
 	if err == nil {
 		return lit, nil
-	}
-
-	fn, err := ts.ParseFuncDecl(true)
-	if err == nil {
-		return &fn, nil
-	}
-
-	ident, err := ts.ParseIdent()
-	if err == nil {
-		return &ident, nil
 	}
 
 	opening := ts.ParseType(0, p.T_LPAREN)
@@ -1383,17 +1470,19 @@ func (u *Unop) Render(nb *NodeBuilder) {
 func (u *Unop) Start() p.Location { return u.Op.Loc }
 func (u *Unop) End() p.Location   { return u.Value.End() }
 
+var UNARY_OPERATOR_TOKENS = []p.TOKEN_TYPE{
+	p.T_MINUS,
+	p.T_EXCLAM,
+	p.T_BITNOT,
+	p.T_DECREMENT,
+	p.T_INCREMENT,
+}
+
 func (ts *Scanner) ParseUnop() (Unop, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
-	op := ts.ParseAnyType(0,
-		p.T_MINUS,
-		p.T_EXCLAM,
-		p.T_BITNOT,
-		p.T_DECREMENT,
-		p.T_INCREMENT,
-	)
+	op := ts.ParseAnyType(0, UNARY_OPERATOR_TOKENS...)
 	if op == nil {
 		return Unop{}, errors.New("Missing operator")
 	}
@@ -1415,14 +1504,16 @@ func (ts *Scanner) ParseUnop() (Unop, error) {
 	}, nil
 }
 
+var POSTFIX_OPERATOR_TOKENS = []p.TOKEN_TYPE{
+	p.T_DECREMENT,
+	p.T_INCREMENT,
+}
+
 func (ts *Scanner) ParseUnopPostfix(val Node) (Unop, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
-	op := ts.ParseAnyType(0,
-		p.T_DECREMENT,
-		p.T_INCREMENT,
-	)
+	op := ts.ParseAnyType(0, POSTFIX_OPERATOR_TOKENS...)
 	if op == nil {
 		return Unop{}, errors.New("Missing operator")
 	}
@@ -1453,31 +1544,33 @@ func (b *Binop) Render(nb *NodeBuilder) {
 	)
 }
 
+var BINARY_OPERATOR_TOKENS = []p.TOKEN_TYPE{
+	p.T_PLUS,
+	p.T_MINUS,
+	p.T_DIV,
+	p.T_MUL,
+	p.T_MOD,
+	p.T_AND,
+	p.T_OR,
+	p.T_BITAND,
+	p.T_BITOR,
+	p.T_BITXOR,
+	p.T_LEQ,
+	p.T_GEQ,
+	p.T_EQ,
+	p.T_NEQ,
+	p.T_LESS,
+	p.T_MORE,
+	p.T_LSHIFT,
+	p.T_RSHIFT,
+	p.T_NULLISH,
+}
+
 func (ts *Scanner) ParseBinop(left Node) (Binop, error) {
 	g := ts.GuardStart()
 	defer ts.GuardEnd(g)
 
-	op := ts.ParseAnyType(0,
-		p.T_PLUS,
-		p.T_MINUS,
-		p.T_DIV,
-		p.T_MUL,
-		p.T_MOD,
-		p.T_AND,
-		p.T_OR,
-		p.T_BITAND,
-		p.T_BITOR,
-		p.T_BITXOR,
-		p.T_LEQ,
-		p.T_GEQ,
-		p.T_EQ,
-		p.T_NEQ,
-		p.T_LESS,
-		p.T_MORE,
-		p.T_LSHIFT,
-		p.T_RSHIFT,
-		p.T_NULLISH,
-	)
+	op := ts.ParseAnyType(0, BINARY_OPERATOR_TOKENS...)
 	if op == nil {
 		ident_op := ts.ParseType(0, p.T_IDENT)
 
@@ -1734,7 +1827,7 @@ func (ts *Scanner) ParseBlockStmt(kwd_str string, t AST_TYPE) (BlockStmt, error)
 type IfStmt struct {
 	BlockStmt
 	Elseifs []BlockStmt
-	Else    *Block
+	Else    Node
 }
 
 func (i *IfStmt) End() p.Location {
@@ -1787,16 +1880,20 @@ func (ts *Scanner) ParseIfStmt() (IfStmt, error) {
 		elifs = append(elifs, elif)
 	}
 
-	var else_block *Block
+	var else_block Node
 	if ts.ParseExact(0, "else") != nil {
 		ts.Move(1)
-		eb, err := ts.ParseBlock()
+
+		b, err := ts.ParseBlock()
 		if err != nil {
-			ts.Restore()
-			return IfStmt{}, err
+			else_block = ts.ParseStatement()
+			if else_block == nil {
+				ts.Restore()
+				return IfStmt{}, err
+			}
+		} else {
+			else_block = &b
 		}
-		eb.Base.Type = AST_ELSE
-		else_block = &eb
 	}
 
 	ts.Commit()
@@ -1857,6 +1954,7 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 		ts.Restore()
 		return ForLoop{}, errors.New("Missing semicolon")
 	}
+	ts.Move(1)
 
 	cond, err := ts.ParseExpr(nil)
 	if err != nil {
@@ -1869,6 +1967,7 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 		ts.Restore()
 		return ForLoop{}, errors.New("Missing semicolon")
 	}
+	ts.Move(1)
 
 	oper, err := ts.ParseExpr(nil)
 	if err != nil {
@@ -1878,13 +1977,20 @@ func (ts *Scanner) ParseForLoop() (ForLoop, error) {
 
 	ts.EatSemicolon()
 
+	cl := ts.ParseType(0, p.T_RPAREN)
+	if cl == nil {
+		ts.Restore()
+		return ForLoop{}, errors.New("Missing closing parenthesis")
+	}
+	ts.Move(1)
+
 	var body Node
 	b, err := ts.ParseBlock()
 	if err != nil {
-		body, err = ts.ParseExpr(nil)
-		if err != nil {
+		body := ts.ParseStatement()
+		if body == nil {
 			ts.Restore()
-			return ForLoop{}, err
+			return ForLoop{}, errors.New("Missing for loop body")
 		}
 	} else {
 		body = &b
@@ -2039,6 +2145,124 @@ func (ts *Scanner) ParseCase() (Case, error) {
 		Value: val,
 		colon: colon,
 		Code:  code,
+	}, nil
+}
+
+type EnumMember struct {
+	Name  p.Token
+	Value Node
+}
+
+type Enum struct {
+	Base
+	kwd          *p.Token
+	Name         p.Token
+	Members      []EnumMember
+	closingCurly *p.Token
+}
+
+func (e *Enum) Start() p.Location { return e.kwd.Loc }
+func (e *Enum) End() p.Location   { return e.closingCurly.Loc }
+
+func (e *Enum) Render(nb *NodeBuilder) {
+	nb.RenderNode(
+		&e.Base,
+		NodeField{"Name", e.Name},
+		NodeField{"Members", e.Members},
+	)
+}
+
+func (ts *Scanner) ParseEnumMember() (EnumMember, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	member_name := ts.ParseType(0, p.T_IDENT)
+	if member_name == nil {
+		return EnumMember{}, errors.New("Not an enum member")
+	}
+
+	ts.Save()
+
+	eq := ts.ParseType(1, p.T_ASSIGN)
+	if eq == nil {
+		ts.Move(1)
+		ts.Commit()
+		return EnumMember{
+			Name:  *member_name,
+			Value: nil,
+		}, nil
+	}
+
+	ts.Move(2)
+
+	member_value, err := ts.ParseExpr(nil)
+	if err != nil {
+		ts.Restore()
+		return EnumMember{}, err
+	}
+
+	ts.Commit()
+	return EnumMember{
+		Name:  *member_name,
+		Value: member_value,
+	}, nil
+}
+
+func (ts *Scanner) ParseEnum() (Enum, error) {
+	g := ts.GuardStart()
+	defer ts.GuardEnd(g)
+
+	kwd := ts.ParseExact(0, "enum")
+	if kwd == nil {
+		return Enum{}, errors.New("Not an enum")
+	}
+
+	ts.Save()
+	ts.Move(1)
+
+	name := ts.ParseType(0, p.T_IDENT)
+	if name == nil {
+		ts.Restore()
+		return Enum{}, errors.New("Missing enum name")
+	}
+	ts.Move(1)
+
+	op := ts.ParseType(0, p.T_LCURLY)
+	if op == nil {
+		ts.Restore()
+		return Enum{}, errors.New("Missing opening curly brace")
+	}
+	ts.Move(1)
+
+	members := make([]EnumMember, 0)
+	for {
+		member, err := ts.ParseEnumMember()
+		if err == nil {
+			members = append(members, member)
+			if ts.ParseType(0, p.T_COMMA) != nil {
+				ts.Move(1)
+			}
+		} else {
+			if ts.ParseType(0, p.T_COMMA) != nil {
+				ts.Move(1)
+			}
+			break
+		}
+	}
+
+	cl := ts.ParseType(0, p.T_RCURLY)
+	if cl == nil {
+		ts.Restore()
+		return Enum{}, errors.New("Missing closing curly brace")
+	}
+	ts.Move(1)
+
+	ts.Commit()
+	return Enum{
+		Base:    Base{AST_ENUM},
+		kwd:     kwd,
+		Name:    *name,
+		Members: members,
 	}, nil
 }
 
