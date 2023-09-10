@@ -217,7 +217,7 @@ func (s *scanner) char() byte {
 }
 
 func (s *scanner) move() {
-	s.Loc.Index += 1
+	s.Loc.Index++
 	if s.char() == '\n' {
 		s.Loc.Char = 0
 		s.Loc.Line++
@@ -498,6 +498,7 @@ type Macro struct {
 	Name, Config    string
 	Value           Tokens
 	RawTokensLength int
+	NewLines        int
 }
 
 func (ts Tokens) ExtractMacros() map[string]Macro {
@@ -518,10 +519,12 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 		macro_name := ""
 		macro_config := ""
 		if ts.MatchTypeAt(i+3, T_COLON) && ts.MatchTypeAt(i+4, T_IDENT) {
+			// #macro platform:name abc
 			macro_name = ts[i+4].Value
 			macro_config = ts[i+2].Value
 			i += 5
 		} else {
+			// #macro name abc
 			macro_name = ts[i+2].Value
 			i += 3
 		}
@@ -529,15 +532,20 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 		macro_value := Tokens{}
 		macro_newlines := 0
 		for {
-			tok := ts[i]
-			if tok.Type == T_NEWLINE || tok.Type == T_EOF {
+			if ts[i].Type == T_NEWLINE || ts[i].Type == T_EOF {
 				break
 			}
-			if tok.Type == T_BACKSLASH {
-				i++
-			}
-			if ts[i].Type == T_NEWLINE {
-				macro_newlines++
+			for {
+				if ts[i].Type == T_BACKSLASH {
+					i++
+					continue
+				}
+				if ts[i].Type == T_NEWLINE {
+					macro_newlines++
+					i++
+					continue
+				}
+				break
 			}
 			macro_value = append(macro_value, ts[i])
 			i++
@@ -548,6 +556,7 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 			Config:          macro_config,
 			Value:           macro_value,
 			RawTokensLength: i - macro_start - macro_newlines,
+			NewLines:        macro_newlines,
 		}
 	}
 
@@ -555,7 +564,7 @@ func (ts Tokens) ExtractMacros() map[string]Macro {
 }
 
 func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
-	for i := len(ts) - 1; i >= 0; i-- {
+	for i := 0; i < len(ts); i++ {
 		if ts[i].Type != T_IDENT {
 			continue
 		}
@@ -564,6 +573,7 @@ func (ts Tokens) InsertMacros(macros map[string]Macro) Tokens {
 			continue
 		}
 		if ts.MatchTypeAt(i-2, T_HASH) || ts.MatchTypeAt(i-4, T_HASH) {
+			i += macro.RawTokensLength + macro.NewLines
 			continue
 		}
 		ts = slices.Replace(ts, i, i+1, macro.Value...)

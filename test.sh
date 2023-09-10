@@ -6,6 +6,6 @@ while true; do
     bash ./build.sh
     # ./gmtc -path tests/scribble/Scribble.yyp
     # ./gmtc -path tests/test1.gml
-    ./gmtc -path tests/scribble/scripts/__scribble_gen_4_build_words/__scribble_gen_4_build_words.gml
+    ./gmtc -path tests/scribble/scripts/UnicodeToKrutidev/UnicodeToKrutidev.gml
     inotifywait -e modify -e move -e create -e delete -q --recursive --include ".+go" .
 done
