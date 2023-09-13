@@ -3,18 +3,62 @@ package project
 import (
 	"fmt"
 	"github.com/tidwall/gjson"
-	"gmtc/utils"
+	"gmtc/ast"
 	"gmtc/parser"
+	"gmtc/utils"
 	"os"
 	"path"
 	"strings"
 )
 
+type PROJECT_KIND int
+
+const (
+	PK_PROJECT PROJECT_KIND = iota
+	PK_SCRIPT
+	PK_CODE
+)
+
 type Project struct {
+	Kind      PROJECT_KIND
 	Root      string
 	File      string
 	Resources []Resource
+	Macros    map[string]parser.Macro
 	Errors    utils.Errors
+}
+
+func SingleFile(file_path string) Project {
+	script, err := loadGMScript(file_path)
+	var errs []error = nil
+	if err != nil {
+		errs = append(errs, err)
+	}
+
+	return Project{
+		Kind:      PK_SCRIPT,
+		Root:      file_path,
+		File:      file_path,
+		Resources: []Resource{&script},
+		Macros: make(map[string]parser.Macro),
+		Errors:    errs,
+	}
+}
+
+func CodeProject(name string, code string) Project {
+	return Project{
+		Kind: PK_CODE,
+		Root: name,
+		File: name,
+		Resources: []Resource{&ResGMScript{
+			BaseResource: BaseResource{ name },
+			GMLPath: name,
+			Script: name,
+
+		}},
+		Macros: make(map[string]parser.Macro),
+		Errors: nil,
+	}
 }
 
 func LoadProject(file_path string) (Project, error) {
@@ -45,8 +89,40 @@ func LoadProject(file_path string) (Project, error) {
 		Root:      root_dir,
 		File:      file_path,
 		Resources: resources,
+		Macros: make(map[string]parser.Macro),
 		Errors:    proj_errors,
 	}, nil
+}
+
+func (p *Project) Parse() {
+	for _, res := range p.Resources {
+		switch v := res.(type) {
+			case *ResGMScript:
+				macros := v.preprocess()
+				p.Macros = utils.MapMerge(p.Macros, macros)
+			case *ResGMObject:
+				macros := v.preprocess()
+				p.Macros = utils.MapMerge(p.Macros, macros)
+		}
+	}
+
+	for _, res := range p.Resources {
+		switch v := res.(type) {
+			case *ResGMScript:
+				v.injectMacros(p.Macros)
+			case *ResGMObject:
+				v.injectMacros(p.Macros)
+		}
+	}
+
+	for _, res := range p.Resources {
+		switch v := res.(type) {
+			case *ResGMScript:
+				v.parseAST()
+			case *ResGMObject:
+				v.parseAST()
+		}
+	}
 }
 
 func (p *Project) ErrorCount() int {
@@ -73,8 +149,8 @@ type Resource interface {
 	GetErrors() utils.Errors
 }
 
-type LoadResourceError struct { error }
-type UnknownResourceError struct { error }
+type LoadResourceError struct{ error }
+type UnknownResourceError struct{ error }
 
 func loadResource(file_path string) (Resource, error) {
 	b, err := os.ReadFile(file_path)
@@ -119,20 +195,33 @@ type ResGMScript struct {
 	GMLPath string
 	Script  string
 	Tokens  parser.Tokens
+	Ast     ast.ScriptNode
 	Errors  utils.Errors
 }
 
 func (r *ResGMScript) GetErrors() utils.Errors { return r.Errors }
 
-func (r *ResGMScript) Pretokenize() (map[string]parser.Macro, error) {
+func (r *ResGMScript) preprocess() map[string]parser.Macro {
 	ts, err := parser.Pretokenize(r.Script)
 	if err != nil {
 		r.Tokens = nil
 		r.Errors = r.Errors.AddPrefix(r.GMLPath, err)
-		return nil, err
+		return nil
 	}
 	r.Tokens = ts
-	return ts.ExtractMacros(), nil
+	return ts.ExtractMacros()
+}
+
+func (r *ResGMScript) injectMacros(macros map[string]parser.Macro) {
+	r.Tokens = r.Tokens.InsertMacros(macros).Clean(macros)
+}
+
+func (r *ResGMScript) parseAST() {
+	var err error
+	r.Ast, err = ast.ParseAST(r.Tokens)
+	if err != nil {
+		r.Errors = r.Errors.AddPrefix(r.GMLPath, err)
+	}
 }
 
 func loadGMScript(path string) (ResGMScript, error) {
@@ -156,6 +245,27 @@ type ResGMObject struct {
 	Name   string
 	Events []ResGMEvent
 	Errors utils.Errors
+}
+
+func (r *ResGMObject) preprocess() map[string]parser.Macro {
+	all_macros := make([]map[string]parser.Macro, 0)
+	for _, ev := range r.Events {
+		macros := ev.preprocess()
+		if macros != nil { all_macros = append(all_macros, macros) }
+	}
+	return utils.MapMerge(all_macros...)
+}
+
+func (r *ResGMObject) injectMacros(macros map[string]parser.Macro) {
+	for _, ev := range r.Events {
+		ev.injectMacros(macros)
+	}
+}
+
+func (r *ResGMObject) parseAST() {
+	for _, ev := range r.Events {
+		ev.parseAST()
+	}
 }
 
 func (r *ResGMObject) GetErrors() utils.Errors {

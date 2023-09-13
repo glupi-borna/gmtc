@@ -439,7 +439,7 @@ func (s *scanner) parseString() (Token, error) {
 }
 
 func (s *scanner) tokenize() (Tokens, error) {
-	tokens := Tokens{}
+	tokens := make(Tokens, 0, max(len(s.Text) / 10, 128))
 
 	// last_loc is just a safeguard while the tokenizer is being developed.
 	// It should be possible to remove it.
